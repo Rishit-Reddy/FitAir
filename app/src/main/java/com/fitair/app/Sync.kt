@@ -160,7 +160,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
 object SyncScheduler {
     private const val PERIODIC = "fitair-sync-periodic"
     private const val NOW = "fitair-sync-now"
-    private val net = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+    private val net = Constraints.NONE
 
     fun schedulePeriodic(ctx: Context) {
         val req = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(net).build()
