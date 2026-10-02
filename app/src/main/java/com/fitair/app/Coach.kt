@@ -73,12 +73,18 @@ class CoachRepo(private val ctx: Context) {
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolDef("get_heart_rate", "Heart rate buckets (min/mean/max/n) between two epoch-ms timestamps.",
             listOf(Triple("from_ms", "integer", "Start, epoch milliseconds UTC"), Triple("to_ms", "integer", "End, epoch milliseconds UTC"),
-                Triple("bucket_s", "integer", "Bucket size in seconds (min 30 unless range under 2 h)"))),
+                Triple("bucket_s", "integer", "Bucket size in seconds (multiple of 30; heart rate is stored at 30 s resolution; 0 = raw samples, only available inside workouts)"))),
         ToolDef("get_workouts", "Workouts in a date range with duration, HR mean/max, 1-min HR recovery, drift and time in zones.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolDef("get_readiness", "The app's own readiness score (0-100) with components, baseline and notes for a date.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
         ToolDef("get_baselines", "28-day baselines (resting HR, HRV, sleep) with standard deviations.", emptyList()),
+        ToolDef("get_daily_metrics", "The app's own stored daily metrics per date: sleep_score (with components, need and sleep debt), readiness (with full breakdown), TRIMP load, acute/chronic load, ACWR, resting HR, HRV, sleep minutes, steps and insights.",
+            listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
+        ToolDef("get_insights", "Rule-based insights (info/watch/alert) for one date, e.g. elevated resting HR, low HRV, sleep debt, load spikes.",
+            listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
+        ToolDef("get_load", "Daily training load: TRIMP, acute (7-day EWMA), chronic (28-day EWMA) and ACWR for a date range.",
+            listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
     )
 
     suspend fun ask(history: List<ChatMsg>, onNote: (String) -> Unit): String = withContext(Dispatchers.IO) {
@@ -128,7 +134,7 @@ Now: ${now.format(fmt)} (${zone.id}). Today is ${today} (${today.dayOfWeek.getDi
 
 Rules:
 - Use the tools to fetch specifics (a day, a range, heart rate series, workouts, readiness, baselines) instead of guessing. Never invent numbers. If data is missing or a tool fails, say so plainly.
-- Readiness is this app's own score (components: sleep, HRV, resting HR, load), not a clinical measure. You give no medical diagnosis; suggest seeing a clinician for worrying symptoms.
+- sleep_score, readiness and training load (TRIMP, acute/chronic load, ACWR) are this app's own metrics with documented components (get_daily_metrics returns the breakdowns, get_load the load series, get_insights rule-based flags). Prefer them over re-deriving your own scores; explain them via their components. Readiness components: sleep duration, sleep quality (sleep_score), HRV, resting HR, load ratio, ACWR. They are not clinical measures. You give no medical diagnosis; suggest seeing a clinician for worrying symptoms.
 - Keep answers short unless the user asks for depth. Cite concrete numbers and compare against baselines where useful.
 
 Always-available context (fetched just now):
@@ -154,6 +160,9 @@ $ctxText
             "get_workouts" -> "looked up workouts ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_readiness" -> "looked up readiness for ${d(a.optString("date"))}"
             "get_baselines" -> "looked up 28-day baselines"
+            "get_daily_metrics" -> "looked up daily metrics ${d(a.optString("from"))} to ${d(a.optString("to"))}"
+            "get_insights" -> "looked up insights for ${d(a.optString("date"))}"
+            "get_load" -> "looked up training load ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             else -> "called $name"
         }
     }
@@ -173,13 +182,17 @@ $ctxText
                     val f = args.getLong("from_ms"); val to = args.getLong("to_ms")
                     var b = args.optLong("bucket_s", 60)
                     val shortRange = (to - f) < 2 * 3600_000L
-                    if (b < 30 && !shortRange) { AppLog.d("coach tool: bucket_s $b clamped to 30"); b = 30 }
                     if (b < 0) b = 0
+                    if (b == 0L && !shortRange) { AppLog.d("coach tool: bucket_s 0 on long range -> 30"); b = 30 }
+                    if (b in 1..29) { AppLog.d("coach tool: bucket_s $b clamped to 30"); b = 30 }
                     "/hr?from_ms=$f&to_ms=$to&bucket_s=$b"
                 }
                 "get_workouts" -> "/workouts?from=${enc(args.getString("from"))}&to=${enc(args.getString("to"))}&$tz"
                 "get_readiness" -> "/readiness?date=${enc(args.getString("date"))}&$tz"
                 "get_baselines" -> "/baselines?$tz"
+                "get_daily_metrics" -> "/daily?from=${enc(args.getString("from"))}&to=${enc(args.getString("to"))}"
+                "get_insights" -> "/insights?date=${enc(args.getString("date"))}"
+                "get_load" -> "/load?from=${enc(args.getString("from"))}&to=${enc(args.getString("to"))}"
                 else -> return JSONObject().put("error", "unknown tool $name").toString()
             }
             val out = trunc(ServerApi.get(ctx, path).toString())

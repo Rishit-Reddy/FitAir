@@ -20,11 +20,12 @@ object LocalApi {
     private val STAGE_NAMES = mapOf(0 to "unknown", 1 to "awake", 2 to "sleeping", 3 to "out_of_bed",
         4 to "light", 5 to "deep", 6 to "rem", 7 to "awake_in_bed")
     private val ASLEEP = setOf(2, 4, 5, 6)
-    private val WEIGHTS = linkedMapOf("sleep" to 0.35, "hrv" to 0.30, "resting_hr" to 0.20, "load" to 0.15)
+    private val WEIGHTS = linkedMapOf("sleep" to 0.20, "sleep_quality" to 0.15, "hrv" to 0.25,
+        "resting_hr" to 0.15, "load" to 0.10, "acwr" to 0.15)
     private const val MIN_BASELINE_DAYS = 7
     private const val DEFAULT_INTENSITY = 0.6
 
-    private fun maxHr(): Double = System.getenv("FITAIR_MAXHR")?.toDoubleOrNull() ?: 190.0
+    internal fun maxHr(): Double = System.getenv("FITAIR_MAXHR")?.toDoubleOrNull() ?: 190.0
 
     fun get(ctx: Context, path: String): JSONObject {
         val t0 = System.currentTimeMillis()
@@ -32,6 +33,7 @@ object LocalApi {
         val route = p.substringBefore('?')
         val q = parseQuery(p.substringAfter('?', ""))
         val db = LocalStore.get(ctx).db
+        appCtx = ctx.applicationContext
         val out = try {
             when (route) {
                 "/summary/day" -> summaryDay(db, q)
@@ -40,6 +42,9 @@ object LocalApi {
                 "/workouts" -> workouts(db, q)
                 "/readiness" -> readinessEndpoint(db, q)
                 "/baselines" -> baselinesEndpoint(db, q)
+                "/daily" -> dailyEndpoint(ctx, q)
+                "/insights" -> insightsEndpoint(ctx, q)
+                "/load" -> loadEndpoint(ctx, q)
                 else -> throw IllegalArgumentException("unknown path $route")
             }
         } catch (e: Exception) {
@@ -79,24 +84,24 @@ object LocalApi {
 
     // ---------- helpers ----------
 
-    private fun r(x: Double?, n: Int = 1): Double? {
+    internal fun r(x: Double?, n: Int = 1): Double? {
         if (x == null || x.isNaN() || x.isInfinite()) return x
         return BigDecimal(x).setScale(n, RoundingMode.HALF_EVEN).toDouble()  // exact-binary half-even, like Python round()
     }
 
-    private fun j(x: Any?): Any = x ?: JSONObject.NULL
+    internal fun j(x: Any?): Any = x ?: JSONObject.NULL
 
-    private fun bounds(d: LocalDate, z: ZoneId): Pair<Long, Long> =
+    internal fun bounds(d: LocalDate, z: ZoneId): Pair<Long, Long> =
         d.atStartOfDay(z).toInstant().toEpochMilli() to d.plusDays(1).atStartOfDay(z).toInstant().toEpochMilli()
 
-    private fun daysBetween(d0: LocalDate, d1: LocalDate): List<LocalDate> {
+    internal fun daysBetween(d0: LocalDate, d1: LocalDate): List<LocalDate> {
         val n = (d1.toEpochDay() - d0.toEpochDay()).toInt()
         return (0..n).map { d0.plusDays(it.toLong()) }
     }
 
-    private fun clip(x: Double) = maxOf(0.0, minOf(100.0, x))
+    internal fun clip(x: Double) = maxOf(0.0, minOf(100.0, x))
 
-    private fun mean(v: List<Double>): Double? = if (v.isEmpty()) null else v.sum() / v.size
+    internal fun mean(v: List<Double>): Double? = if (v.isEmpty()) null else v.sum() / v.size
 
     private inline fun <T> SQLiteDatabase.rows(sql: String, args: Array<String> = emptyArray(), f: (android.database.Cursor) -> T): List<T> {
         val out = ArrayList<T>()
@@ -106,7 +111,7 @@ object LocalApi {
 
     // ---------- per-day series ----------
 
-    private class Day(val date: String) {
+    internal class Day(val date: String) {
         var steps = 0L
         var distance = 0.0
         var active = 0L
@@ -130,12 +135,13 @@ object LocalApi {
             .put("exercise_count", exCount).put("kcal_total", r(kcal)).put("readiness", j(readiness))
     }
 
-    private class Ex(val start: Long, val end: Long, val type: Int, val title: String, val hrAvg: Double?)
+    internal class Ex(val start: Long, val end: Long, val type: Int, val title: String, val hrAvg: Double?)
 
-    private fun exercises(db: SQLiteDatabase, lo: Long, hi: Long): List<Ex> {
+    internal fun exercises(db: SQLiteDatabase, lo: Long, hi: Long): List<Ex> {
         val rows = db.rows(
             "SELECT e.start_ms, e.end_ms, e.type, e.title, " +
-                "(SELECT avg(bpm) FROM heart_rate h WHERE h.t BETWEEN e.start_ms AND e.end_ms) " +
+                "COALESCE((SELECT avg(bpm) FROM heart_rate h WHERE h.t BETWEEN e.start_ms AND e.end_ms), " +
+                "(SELECT sum(mean*n)/sum(n) FROM hr_30s h WHERE h.t30+30000>e.start_ms AND h.t30<=e.end_ms)) " +
                 "FROM exercise e WHERE e.start_ms >= $lo AND e.start_ms < $hi ORDER BY e.start_ms, e.end_ms DESC"
         ) { Ex(it.getLong(0), it.getLong(1), it.getInt(2), it.getString(3) ?: "", if (it.isNull(4)) null else it.getDouble(4)) }
         val out = ArrayList<Ex>()
@@ -148,7 +154,7 @@ object LocalApi {
         return out
     }
 
-    private fun series(db: SQLiteDatabase, z: ZoneId, d0: LocalDate, d1: LocalDate, maxhr: Double): LinkedHashMap<String, Day> {
+    internal fun series(db: SQLiteDatabase, z: ZoneId, d0: LocalDate, d1: LocalDate, maxhr: Double): LinkedHashMap<String, Day> {
         val dates = daysBetween(d0, d1)
         val bnd = dates.map { bounds(it, z) }
         val lo0 = bnd.first().first
@@ -161,7 +167,7 @@ object LocalApi {
         for (i in dates.indices) {
             val (lo, hi) = bnd[i]
             val day = out[dates[i].toString()]!!
-            db.rawQuery("SELECT avg(bpm), min(bpm), max(bpm) FROM heart_rate WHERE t>=$lo AND t<$hi", null).use { c ->
+            db.rawQuery("SELECT sum(mean*n)/sum(n), min(\"min\"), max(\"max\") FROM hr_30s WHERE t30>=$lo AND t30<$hi", null).use { c ->
                 if (c.moveToFirst() && !c.isNull(0)) {
                     day.hrMean = r(c.getDouble(0)); day.hrMin = r(c.getDouble(1)); day.hrMax = r(c.getDouble(2))
                 }
@@ -259,9 +265,9 @@ object LocalApi {
             res[2].first, res[2].third, span, weekly)
     }
 
-    private class Ready(val score: Int?, val json: JSONObject)
+    internal class Ready(val score: Int?, val json: JSONObject)
 
-    private fun readiness(ser: Map<String, Day>, d: LocalDate, maxhr: Double): Ready {
+    internal fun readiness(ser: Map<String, Day>, d: LocalDate, maxhr: Double, x: Extras? = null): Ready {
         val today = ser[d.toString()]!!
         val baseDays = (28 downTo 1).map { ser[d.minusDays(it.toLong()).toString()]!! }
         val b = baselinesFrom(baseDays, maxhr)
@@ -313,6 +319,23 @@ object LocalApi {
             text["load"] = f("7-day load %.0f vs weekly average %.0f (ratio %.2f)", acute, b.weeklyLoad, ratio)
         }
 
+        if (x != null) {
+            if (x.sleepScore != null) {
+                val sc = r(clip(x.sleepScore))!!
+                comps["sleep_quality"] = JSONObject().put("score", sc).put("sleep_score", sc)
+                scores["sleep_quality"] = sc
+                text["sleep_quality"] = f("Sleep score %.0f/100 (duration, efficiency, deep+REM, regularity)", sc)
+            } else skip("Sleep quality", "no sleep score for this date")
+            if (x.acwr != null) {
+                val a = x.acwr
+                val sc = r(clip(if (a > 1.3) 100 - (a - 1.3) * 200 else if (a < 0.8) 100 - (0.8 - a) * 100 else 100.0))!!
+                comps["acwr"] = JSONObject().put("score", sc).put("acwr", j(r(a, 2)))
+                    .put("acute_load", j(r(x.acute, 1))).put("chronic_load", j(r(x.chronic, 1)))
+                scores["acwr"] = sc
+                text["acwr"] = f("Acute:chronic load ratio %.2f (7-day vs 28-day TRIMP; 0.8-1.3 is the comfortable range)", a)
+            } else skip("ACWR", "needs >= 14 days of history and a non-trivial chronic load")
+        }
+
         var score: Int? = null
         if (comps.size < 2) {
             notes.add(0, "Not enough data for a readiness score (needs >= $MIN_BASELINE_DAYS days of baseline and at least two signals).")
@@ -331,6 +354,9 @@ object LocalApi {
         return Ready(score, json)
     }
 
+    /** Extra readiness inputs from [DailyMetrics]. */
+    internal class Extras(val sleepScore: Double?, val acwr: Double?, val acute: Double?, val chronic: Double?)
+
     private data class Quad(val name: String, val x: Double?, val sign: Int, val floor: Double)
 
     // ---------- endpoints ----------
@@ -338,7 +364,7 @@ object LocalApi {
     private fun summaryDay(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
         val d = date(q, "date"); val z = zone(q); val mh = maxHr()
         val ser = series(db, z, d.minusDays(28), d, mh)
-        return ser[d.toString()]!!.toJson(readiness(ser, d, mh).score)
+        return ser[d.toString()]!!.toJson(storedReadiness(db, d.toString(), d, z) ?: readiness(ser, d, mh).score)
     }
 
     private fun summaryRange(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
@@ -346,13 +372,89 @@ object LocalApi {
         if (to < from || to.toEpochDay() - from.toEpochDay() > 366) throw IllegalArgumentException("range must be 0..366 days and from <= to")
         val ser = series(db, z, from.minusDays(28), to, mh)
         val arr = JSONArray()
-        for (d in daysBetween(from, to)) arr.put(ser[d.toString()]!!.toJson(readiness(ser, d, mh).score))
+        for (d in daysBetween(from, to)) arr.put(ser[d.toString()]!!.toJson(storedReadiness(db, d.toString(), d, z) ?: readiness(ser, d, mh).score))
         return JSONObject().put("days", arr)
     }
 
+    /** Readiness (rounded) from daily_metrics for [ds]; null when no row exists. */
+    private fun storedReadiness(db: SQLiteDatabase, ds: String, d: LocalDate, z: ZoneId): Int? = try {
+        if (zonedToday(z).toEpochDay() - d.toEpochDay() <= 1) DailyMetrics.ensure(appCtx!!, ds, ds)
+        db.rawQuery("SELECT readiness FROM daily_metrics WHERE date=?", arrayOf(ds)).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) Math.rint(c.getDouble(0)).toInt() else null
+        }
+    } catch (e: Exception) { AppLog.d("LocalApi stored readiness failed: ${e.message}"); null }
+
+    private fun zonedToday(z: ZoneId) = LocalDate.now(z)
+
+    @Volatile private var appCtx: Context? = null
+
     private fun readinessEndpoint(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
         val d = date(q, "date"); val z = zone(q); val mh = maxHr()
+        val ctx = appCtx
+        if (ctx != null) try {
+            DailyMetrics.ensure(ctx, d.toString(), d.toString())
+            DailyMetrics.stored(ctx, d.toString())?.optString("readiness_json")?.takeIf { it.isNotEmpty() && it != "null" }
+                ?.let { return JSONObject(it) }
+        } catch (e: Exception) { AppLog.d("LocalApi readiness via daily_metrics failed: ${e.message}") }
         return readiness(series(db, z, d.minusDays(28), d, mh), d, mh).json
+    }
+
+    // ---------- daily metrics endpoints ----------
+    /*
+     * GET /daily?from=YYYY-MM-DD&to=YYYY-MM-DD   (range 0..366 days)
+     *   {"days":[{"date","tz","computed_ms","readiness","readiness_breakdown":{date,score,components,baseline,notes}|null,
+     *             "sleep_score","sleep_breakdown":{score,need_min,sleep_debt_min,components{duration,efficiency,restorative,
+     *             consistency:{score,weight,...}},notes[]}|null,"load_trimp","acute_load","chronic_load","acwr",
+     *             "rhr","hrv","sleep_min","steps","insights":[{id,severity,title,detail}]}]}
+     * GET /insights?date=YYYY-MM-DD
+     *   {"date","computed_ms","insights":[{id,severity:info|watch|alert,title,detail}]}   (empty when baseline < 7 days)
+     * GET /load?from&to
+     *   {"days":[{"date","trimp","acute","chronic","acwr"}]}   acute=EWMA 7 d, chronic=EWMA 28 d of daily Banister TRIMP,
+     *   acwr=acute/chronic or null (chronic ~0 or < 14 days of history)
+     * Missing/recent rows are computed on demand. Fields are null when not computable.
+     */
+    private fun parseOrNull(s: String?): Any = try {
+        if (s.isNullOrEmpty() || s == "null") JSONObject.NULL
+        else if (s.trimStart().startsWith("[")) JSONArray(s) else JSONObject(s)
+    } catch (e: Exception) { JSONObject.NULL }
+
+    private fun rangeRows(ctx: Context, q: Map<String, String>): List<JSONObject> {
+        val from = date(q, "from"); val to = date(q, "to")
+        if (to < from || to.toEpochDay() - from.toEpochDay() > 366) throw IllegalArgumentException("range must be 0..366 days and from <= to")
+        DailyMetrics.ensure(ctx, from.toString(), to.toString())
+        return LocalStore.get(ctx).getDaily(from.toString(), to.toString())
+    }
+
+    private fun dailyEndpoint(ctx: Context, q: Map<String, String>): JSONObject {
+        val arr = JSONArray()
+        for (row in rangeRows(ctx, q)) {
+            val o = JSONObject()
+            for (k in listOf("date", "tz", "computed_ms", "readiness")) o.put(k, row.opt(k) ?: JSONObject.NULL)
+            o.put("readiness_breakdown", parseOrNull(row.optString("readiness_json")))
+            o.put("sleep_score", row.opt("sleep_score") ?: JSONObject.NULL)
+            o.put("sleep_breakdown", parseOrNull(row.optString("sleep_json")))
+            for (k in listOf("load_trimp", "acute_load", "chronic_load", "acwr", "rhr", "hrv", "sleep_min", "steps"))
+                o.put(k, row.opt(k) ?: JSONObject.NULL)
+            o.put("insights", parseOrNull(row.optString("insights_json")).let { if (it === JSONObject.NULL) JSONArray() else it })
+            arr.put(o)
+        }
+        return JSONObject().put("days", arr)
+    }
+
+    private fun insightsEndpoint(ctx: Context, q: Map<String, String>): JSONObject {
+        val d = date(q, "date").toString()
+        DailyMetrics.ensure(ctx, d, d)
+        val row = DailyMetrics.stored(ctx, d)
+        return JSONObject().put("date", d).put("computed_ms", row?.opt("computed_ms") ?: JSONObject.NULL)
+            .put("insights", parseOrNull(row?.optString("insights_json")).let { if (it === JSONObject.NULL) JSONArray() else it })
+    }
+
+    private fun loadEndpoint(ctx: Context, q: Map<String, String>): JSONObject {
+        val arr = JSONArray()
+        for (row in rangeRows(ctx, q)) arr.put(JSONObject().put("date", row.opt("date"))
+            .put("trimp", row.opt("load_trimp") ?: JSONObject.NULL).put("acute", row.opt("acute_load") ?: JSONObject.NULL)
+            .put("chronic", row.opt("chronic_load") ?: JSONObject.NULL).put("acwr", row.opt("acwr") ?: JSONObject.NULL))
+        return JSONObject().put("days", arr)
     }
 
     private fun baselinesEndpoint(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
@@ -364,24 +466,28 @@ object LocalApi {
 
     private fun hr(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
         val from = long(q, "from_ms"); val to = long(q, "to_ms")
-        val bucket = q["bucket_s"]?.toLongOrNull() ?: 60L
+        val req = q["bucket_s"]?.toLongOrNull() ?: 60L
         val pts = JSONArray()
-        if (bucket <= 0) {
+        // Raw samples exist only inside exercise windows (+-5 min): raw only when bucket_s=0 and the range lies in one.
+        val raw = req <= 0 && db.rawQuery("SELECT 1 FROM exercise WHERE start_ms-300000<=? AND end_ms+300000>=? LIMIT 1",
+            arrayOf(from.toString(), to.toString())).use { it.moveToFirst() }
+        if (raw) {
             db.rawQuery("SELECT t, bpm FROM heart_rate WHERE t>=$from AND t<$to ORDER BY t", null).use { c ->
                 while (c.moveToNext()) {
                     val b = c.getDouble(1)
                     pts.put(JSONObject().put("t", c.getLong(0)).put("min", b).put("mean", r(b)).put("max", b).put("n", 1))
                 }
             }
-        } else {
-            val b = bucket * 1000
-            db.rawQuery("SELECT (t/$b)*$b AS k, min(bpm), avg(bpm), max(bpm), count(*) FROM heart_rate " +
-                "WHERE t>=$from AND t<$to GROUP BY k ORDER BY k", null).use { c ->
-                while (c.moveToNext()) pts.put(JSONObject().put("t", c.getLong(0)).put("min", c.getDouble(1))
-                    .put("mean", r(c.getDouble(2))).put("max", c.getDouble(3)).put("n", c.getLong(4)))
-            }
+            return JSONObject().put("bucket_s", 0).put("resolution", "raw").put("points", pts)
         }
-        return JSONObject().put("bucket_s", maxOf(bucket, 0L)).put("points", pts)
+        val bucket = if (req <= 0) 30L else ((req + 29) / 30) * 30  // multiples of 30 s
+        val b = bucket * 1000
+        db.rawQuery("SELECT (t30/$b)*$b AS k, min(\"min\"), sum(mean*n)/sum(n), max(\"max\"), sum(n) FROM hr_30s " +
+            "WHERE t30>=$from AND t30<$to GROUP BY k ORDER BY k", null).use { c ->
+            while (c.moveToNext()) pts.put(JSONObject().put("t", c.getLong(0)).put("min", c.getDouble(1))
+                .put("mean", r(c.getDouble(2))).put("max", c.getDouble(3)).put("n", c.getLong(4)))
+        }
+        return JSONObject().put("bucket_s", bucket).put("resolution", "30s").put("points", pts)
     }
 
     private fun workouts(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
@@ -392,8 +498,17 @@ object LocalApi {
             db.rawQuery("SELECT t, bpm FROM heart_rate WHERE t BETWEEN ${ex.start} AND ${ex.end + 75000} ORDER BY t", null).use { c ->
                 while (c.moveToNext()) { ts.add(c.getLong(0)); bs.add(c.getDouble(1)) }
             }
+            var resolution = "raw"
+            if (ts.none { it in ex.start..ex.end }) {  // no raw samples: fall back to the 30 s tier (bucket mean at mid-bucket)
+                ts.clear(); bs.clear()
+                db.rawQuery("SELECT t30+15000, sum(mean*n)/sum(n) FROM hr_30s WHERE t30+30000>${ex.start} AND t30<=${ex.end + 75000} " +
+                    "GROUP BY t30 ORDER BY t30", null).use { c ->
+                    while (c.moveToNext()) { ts.add(c.getLong(0)); bs.add(c.getDouble(1)) }
+                }
+                resolution = if (ts.isEmpty()) "none" else "30s"
+            }
             val o = JSONObject().put("start", ex.start).put("end", ex.end).put("type", ex.type).put("title", ex.title)
-                .put("duration_min", j(r((ex.end - ex.start) / 60000.0)))
+                .put("duration_min", j(r((ex.end - ex.start) / 60000.0))).put("resolution", resolution)
             workoutMetrics(ts, bs, ex.start, ex.end, mh, o)
             arr.put(o)
         }

@@ -80,10 +80,11 @@ object DriveExport {
     private const val MANIFEST = "manifest.json"
     private val lock = Mutex()
 
-    private class Spec(val type: String, val timeCol: String, val cols: List<String>, val order: String)
+    private class Spec(val type: String, val timeCol: String, val cols: List<String>, val order: String, val table: String = type)
 
     private val SPECS = listOf(
         Spec("heart_rate", "t", listOf("t", "bpm", "origin"), "t,origin"),
+        Spec("heart_rate_30s", "t30", listOf("t30", "mean", "min", "max", "n", "origin"), "t30,origin", "hr_30s"),
         Spec("steps", "start_ms", listOf("start_ms", "end_ms", "count", "origin"), "start_ms,end_ms,origin"),
         Spec("distance", "start_ms", listOf("start_ms", "end_ms", "meters", "origin"), "start_ms,end_ms,origin"),
         Spec("total_calories", "start_ms", listOf("start_ms", "end_ms", "kcal", "origin"), "start_ms,end_ms,origin"),
@@ -172,7 +173,7 @@ object DriveExport {
             val tType = System.currentTimeMillis()
             var up = 0; var skipped = 0
             val days = ArrayList<Long>()
-            db.rawQuery("SELECT DISTINCT ${spec.timeCol}/$DAY FROM ${spec.type} WHERE ${spec.timeCol}>=? ORDER BY 1",
+            db.rawQuery("SELECT DISTINCT ${spec.timeCol}/$DAY FROM ${spec.table} WHERE ${spec.timeCol}>=? ORDER BY 1",
                 arrayOf(from.toString())).use { c -> while (c.moveToNext()) days.add(c.getLong(0)) }
             for (day in days) {
                 val name = "${spec.type}_${LocalDate.ofEpochDay(day)}.jsonl.gz"
@@ -196,6 +197,8 @@ object DriveExport {
             }
             AppLog.d("drive: [${spec.type}] ${days.size} days: $up uploaded, $skipped unchanged (skipped) in ${System.currentTimeMillis() - tType} ms")
         }
+
+        uploads += exportDaily(db, token, folder, remote, manifest, prefs, tmpDir)
 
         // manifest last; only rewritten when the files map changed
         val sorted = JSONObject()
@@ -230,6 +233,47 @@ object DriveExport {
         return uploads
     }
 
+    /** Whole daily_metrics table as one daily_metrics.jsonl.gz, re-uploaded only when its content hash changes. */
+    private fun exportDaily(
+        db: android.database.sqlite.SQLiteDatabase, token: String, folder: String, remote: MutableMap<String, String>,
+        manifest: JSONObject, prefs: android.content.SharedPreferences, tmpDir: File,
+    ): Int {
+        val name = "daily_metrics.jsonl.gz"
+        val tmp = File(tmpDir, name)
+        try {
+            val md = MessageDigest.getInstance("SHA-256")
+            var rows = 0
+            var maxMs = 0L
+            val cols = LocalStore.DAILY_COLS
+            GZIPOutputStream(tmp.outputStream().buffered(64 * 1024)).use { gz ->
+                db.rawQuery("SELECT ${cols.joinToString(",")} FROM daily_metrics ORDER BY date", null).use { c ->
+                    while (c.moveToNext()) {
+                        val o = JSONObject()
+                        for (i in cols.indices) when (c.getType(i)) {
+                            android.database.Cursor.FIELD_TYPE_INTEGER -> o.put(cols[i], c.getLong(i))
+                            android.database.Cursor.FIELD_TYPE_FLOAT -> o.put(cols[i], c.getDouble(i))
+                            android.database.Cursor.FIELD_TYPE_STRING -> o.put(cols[i], c.getString(i))
+                            else -> o.put(cols[i], JSONObject.NULL)
+                        }
+                        val bytes = (o.toString() + "\n").toByteArray(Charsets.UTF_8)
+                        md.update(bytes); gz.write(bytes); rows++
+                        maxMs = maxOf(maxMs, c.getLong(c.getColumnIndexOrThrow("computed_ms")))
+                    }
+                }
+            }
+            if (rows == 0) return 0
+            val hash = md.digest().joinToString("") { "%02x".format(it) }
+            manifest.put(name, JSONObject().put("rows", rows).put("max_ms", maxMs))
+            val hk = DrivePrefs.HASH_PREFIX + name
+            if (prefs.getString(hk, null) == hash && remote.containsKey(name)) { AppLog.d("drive: $name unchanged (skipped)"); return 0 }
+            val id = upload(token, remote[name], folder, name, "application/gzip", tmp)
+            remote[name] = id
+            prefs.edit().putString(hk, hash).apply()
+            AppLog.d("drive: uploaded $name ($rows rows)")
+            return 1
+        } finally { tmp.delete() }
+    }
+
     private data class DayResult(val rows: Int, val maxMs: Long, val hash: String)
 
     /** Streams one day of one type into [out] as gzip JSONL; hash is SHA-256 of the uncompressed content. */
@@ -238,7 +282,7 @@ object DriveExport {
         var rows = 0
         var maxMs = 0L
         val endCol = if ("end_ms" in spec.cols) "end_ms" else spec.timeCol
-        val sql = "SELECT ${spec.cols.joinToString(",")} FROM ${spec.type} WHERE ${spec.timeCol}>=? AND ${spec.timeCol}<? ORDER BY ${spec.order}"
+        val sql = "SELECT ${spec.cols.joinToString(",")} FROM ${spec.table} WHERE ${spec.timeCol}>=? AND ${spec.timeCol}<? ORDER BY ${spec.order}"
         GZIPOutputStream(out.outputStream().buffered(64 * 1024)).use { gz ->
             db.rawQuery(sql, arrayOf((day * DAY).toString(), ((day + 1) * DAY).toString())).use { c ->
                 val endIdx = c.getColumnIndexOrThrow(endCol)

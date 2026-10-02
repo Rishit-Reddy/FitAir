@@ -23,9 +23,11 @@ class SyncRepo(private val context: Context) {
 
     companion object {
         val TYPES = listOf(
-            "heart_rate", "steps", "distance", "total_calories", "resting_hr",
-            "hrv", "respiratory_rate", "sleep", "exercise",
+            "steps", "distance", "total_calories", "resting_hr",
+            "hrv", "respiratory_rate", "sleep", "exercise", "heart_rate",
         )
+        private const val CHUNK = 86_400_000L
+        private const val WIN = 5 * 60_000L
         private const val BATCH = 5000
         private val OVERLAP = Duration.ofMinutes(10)
     }
@@ -38,9 +40,14 @@ class SyncRepo(private val context: Context) {
         val defaultDays = if (hist) 365L else 30L
         AppLog.d("sync start: history permission=$hist, default window=$defaultDays d, types=${TYPES.size}")
         val written = LinkedHashMap<String, Int>()
+        try { store.migrateHeartRate() } catch (e: Exception) { AppLog.e("heart-rate migration failed (will resume next sync)", e) }
         for (type in TYPES) {
             val tType = System.currentTimeMillis()
             try {
+                if (type == "heart_rate") {
+                    written[type] = syncHeartRate(now, defaultDays)
+                    continue
+                }
                 val wm = store.maxT(type)
                 AppLog.d("[$type] local maxT=${wm ?: "none"}")
                 val from = if (wm == null) now.minus(Duration.ofDays(defaultDays))
@@ -71,6 +78,13 @@ class SyncRepo(private val context: Context) {
                 throw e
             }
         }
+        try { backfillWorkoutHr(now) } catch (e: Exception) { AppLog.e("workout HR backfill failed", e) }
+        val tA = System.currentTimeMillis()
+        try {
+            DailyMetrics.recomputeRecent(context, 14)
+            AppLog.d("daily metrics recomputed in ${System.currentTimeMillis() - tA} ms")
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Throwable) { AppLog.e("daily metrics failed (ignored) after ${System.currentTimeMillis() - tA} ms", e) }
         val counts = store.counts()
         prefs.edit()
             .putLong(SyncPrefs.LAST, System.currentTimeMillis())
@@ -78,6 +92,44 @@ class SyncRepo(private val context: Context) {
             .apply()
         AppLog.d("sync finished OK in ${System.currentTimeMillis() - t0} ms, wrote ${written.values.sum()} rows")
         written
+    }
+
+    /**
+     * Reads heart rate in 1-day chunks aligned to 30 s. Each chunk is read whole (samples filtered to the
+     * chunk), so 30 s buckets are replaced wholesale and overlap with earlier reads is always correct.
+     * Raw samples are kept only inside exercise windows.
+     */
+    private suspend fun syncHeartRate(now: Instant, defaultDays: Long): Int {
+        val wm = store.maxT("heart_rate")
+        AppLog.d("[heart_rate] hr_30s maxT=${wm ?: "none"}")
+        val start = if (wm == null) now.minus(Duration.ofDays(defaultDays)).toEpochMilli() else wm - OVERLAP.toMillis()
+        val end = now.toEpochMilli() + 1
+        var cs = start - start % 30000
+        var n = 0
+        while (cs < end) {
+            val ce = minOf(cs + CHUNK, end - end % 30000 + 30000)
+            val wins = store.exerciseWindows(cs, ce)
+            val samples = ArrayList<JSONObject>()
+            health.readForSync("heart_rate", Instant.ofEpochMilli(cs), Instant.ofEpochMilli(ce)) { page -> samples.addAll(page) }
+            store.ingestHeartRate(samples, cs, ce, wins)
+            n += samples.size
+            cs = ce
+        }
+        AppLog.d("[heart_rate] processed $n samples into hr_30s")
+        return n
+    }
+
+    /** Exercise sessions (last 30 d) lacking raw HR: re-read their window and keep raw samples. */
+    private suspend fun backfillWorkoutHr(now: Instant) {
+        for (w in store.exerciseSince(now.minus(Duration.ofDays(30)).toEpochMilli())) {
+            val a = w[0] - WIN; val b = w[1] + WIN
+            if (store.hasRawHr(a, b) || !store.hasHr30(a, b)) continue
+            val samples = ArrayList<JSONObject>()
+            health.readForSync("heart_rate", Instant.ofEpochMilli(a), Instant.ofEpochMilli(b)) { page -> samples.addAll(page) }
+            val raw = samples.filter { it.getLong("t") in a..b }
+            store.upsert("heart_rate", raw)
+            AppLog.d("backfilled ${raw.size} raw HR samples for workout at ${w[0]}")
+        }
     }
 }
 
