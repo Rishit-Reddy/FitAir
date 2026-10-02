@@ -74,7 +74,10 @@ internal fun rangeOf(values: List<Double?>, band: Band?): Pair<Double, Double> {
     return (lo - pad) to (hi + pad)
 }
 
-@Composable private fun ink() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
+/** Chart colour of the metric being drawn (see MetricAccent); null = neutral ink. */
+val LocalChartAccent = androidx.compose.runtime.compositionLocalOf<Color?> { null }
+
+@Composable private fun ink() = LocalChartAccent.current ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
 @Composable private fun bandFill() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
 @Composable private fun faint() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
 
@@ -156,7 +159,7 @@ fun DotsOnBand(values: List<Double?>, band: Band?, tones: List<Tone>, height: Dp
 /** Rounded bars (width 60 % of the slot) with an optional dashed reference line; today's bar full ink, others 45 %. */
 @Composable
 fun MiniBars(values: List<Double?>, ref: Double?, todayIndex: Int, height: Dp, modifier: Modifier = Modifier) {
-    val full = ink(); val dim = faint(); val refColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val full = ink(); val dim = LocalChartAccent.current?.copy(alpha = 0.35f) ?: faint(); val refColor = MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { }) {
         val n = values.size
         if (n == 0) return@Canvas

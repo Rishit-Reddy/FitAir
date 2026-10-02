@@ -85,6 +85,8 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
     val empty = data.state == CardState.Empty
     val minH = when (size) { CardSize.Large -> 172.dp; CardSize.Small -> 112.dp; CardSize.Grid -> 188.dp }
     val border = if (size == CardSize.Grid && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
+    val accent = if (stale || empty) null else MetricAccent.of(data.id, dark)
+    androidx.compose.runtime.CompositionLocalProvider(com.fitair.app.ui.components.charts.LocalChartAccent provides accent) {
     Column(
         modifier.then(border).clip(Shapes.tile).background(surface)
             .clickable(role = Role.Button, onClick = onClick)
@@ -132,6 +134,7 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
                 if (chip != null) { Spacer(Modifier.height(Spacing.s)); StatusChip(chip, surface) }
             }
         }
+    }
     }
 }
 
