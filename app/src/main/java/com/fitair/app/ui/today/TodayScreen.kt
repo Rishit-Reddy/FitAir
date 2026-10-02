@@ -42,7 +42,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fitair.app.core.Format
 import com.fitair.app.integrations.calendar.CalEvent
 import com.fitair.app.ui.agenda.AgendaFormat
-import com.fitair.app.ui.agenda.AllDayLine
 import com.fitair.app.ui.copy.CopyMorning
 import com.fitair.app.ui.agenda.AgendaList
 import com.fitair.app.ui.agenda.AgendaLive
@@ -167,48 +166,54 @@ fun TodayScreen(
                 EmptyState("No data yet", "Pull down to sync from Health Connect.")
                 return@Page
             }
-            val nowLocal = remember(now) { LocalDateTime.now() }
-            val waterOpen = remember(now, ui.wake, mode) {
-                val nowMin = nowLocal.hour * 60 + nowLocal.minute
-                val bed = (ui.wake?.usualBedMin ?: 23 * 60).let { if (it < 12 * 60) it + 24 * 60 else it }
-                !(mode == Mode.Evening && (nowMin >= bed - 60 || nowMin < 4 * 60))
-            }
             val ctx = androidx.compose.ui.platform.LocalContext.current
             // seen state is read from the DB each time the screen is rebuilt after "Yes"; onOpen() above reloads the screen
             val seen = remember(ui.date, confirmSeen) { MorningSeen.isSeen(ctx, ui.date) }
             val recap = mode == Mode.Morning && !seen
+            val evening = mode == Mode.Evening
             val cardMode = if (mode == Mode.Morning) Mode.Day else mode
-            val layout = todayLayout(cardMode, waterOpen = waterOpen && ui.water != null, alert = ui.insights.any { it.alert })
-            val hero: @Composable () -> Unit = {
-                if (recap) MorningRecap(ui.snapshot, onSleep = { onOpen(TodayDest.Sleep) },
-                    onReadiness = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) }, onSeen = { confirmSeen = true })
-                else TodayCards(ui.snapshot, cardMode, layout, now,
-                    onCard = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) })
-            }
-            val belowCards: @Composable () -> Unit = {
-                layout.below.forEach { b ->
-                    when (b) {
-                        Below.NextUp -> Unit // the calendar panel replaces the Next up strip
-                        Below.Water -> WaterBlock(ui, mode, vm, onEnableReminders = {
-                            if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
-                        })
-                        Below.Alert -> ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) }
-                    }
+            val openCard: (MetricId) -> Unit = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) }
+            val verdict = remember(ui.snapshot, evening, now / 60_000L) {
+                ui.snapshot?.let { s ->
+                    TodayLines.verdict(evening, MetricCards.card(MetricId.Readiness, s, mode = cardMode), MetricCards.card(MetricId.Bedtime, s, mode = cardMode))
                 }
             }
-            val panel: @Composable (Modifier) -> Unit = { m ->
-                TodayCalendarPanel(agenda, now, onOpenCalendar, requestCalendar, m)
+            val recapCard: @Composable () -> Unit = {
+                MorningRecap(ui.snapshot, onSleep = { onOpen(TodayDest.Sleep) },
+                    onReadiness = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) }, onSeen = { confirmSeen = true })
+            }
+            val vitals: @Composable () -> Unit = { VitalsRow(ui.snapshot, vitalIds(evening), cardMode, now, openCard) }
+            val snippets: @Composable () -> Unit = {
+                DaySnippets(agenda, ui.wake?.wakeMs?.takeIf { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() == ui.date }, now, onOpenCalendar, requestCalendar)
+            }
+            val belowCards: @Composable () -> Unit = {
+                ui.water?.let { WaterBlock(ui, mode, vm, onEnableReminders = {
+                    if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
+                }) }
+                ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) }
             }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 if (maxWidth >= WIDE) {
-                    // unfolded: cards and Water on the left (max 560 dp), the calendar panel on the right
+                    // unfolded: heart rate, numbers and Water on the left (max 560 dp), the day snippets on the right
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                        Column(Modifier.weight(1f).widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); belowCards() }
-                        panel(Modifier.weight(1f).fillMaxHeight())
+                        Column(Modifier.weight(1f).widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+                            if (recap) recapCard() else {
+                                verdict?.let { Text(it, style = Type.body, maxLines = 2) }
+                                HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.weight(1f).heightIn(min = 150.dp))
+                                vitals()
+                            }
+                            belowCards()
+                        }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { snippets() }
                     }
                 } else {
                     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                        hero(); belowCards(); panel(Modifier.weight(1f).fillMaxWidth())
+                        if (recap) recapCard() else {
+                            verdict?.let { Text(it, style = Type.body, maxLines = 2) }
+                            HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.weight(1f).heightIn(min = 150.dp, max = 330.dp))
+                            vitals()
+                        }
+                        snippets(); belowCards()
                     }
                 }
             }

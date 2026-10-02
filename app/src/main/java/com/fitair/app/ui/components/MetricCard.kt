@@ -77,7 +77,7 @@ private fun ValueText(value: String?, unit: String?, valueStyle: androidx.compos
  * The whole card is one click target with a full-sentence description; charts are silent.
  */
 @Composable
-fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier, onPage: Boolean = false, compact: Boolean = false) {
+fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier, onPage: Boolean = false, compact: Boolean = false, chartHeight: androidx.compose.ui.unit.Dp? = null) {
     val dark = isDarkTheme()
     val raised = size == CardSize.Grid || onPage
     val surface = if (raised) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
@@ -86,7 +86,7 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
     val empty = data.state == CardState.Empty
     val minH = when (size) { CardSize.Large -> if (compact) 104.dp else 172.dp; CardSize.Small -> if (compact) 60.dp else 112.dp; CardSize.Grid -> 188.dp }
     val vPad = if (compact) 8.dp else Spacing.tilePad
-    val chartH = if (compact) 26.dp else 56.dp
+    val chartH = chartHeight ?: if (compact) 26.dp else 56.dp
     val border = if (raised && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
     val accent = if (stale || empty) null else MetricAccent.of(data.id, dark)
     androidx.compose.runtime.CompositionLocalProvider(com.fitair.app.ui.components.charts.LocalChartAccent provides accent) {

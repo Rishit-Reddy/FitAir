@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -97,11 +98,13 @@ fun AgendaScreen(onBack: (() -> Unit)? = null, onOpenSettings: () -> Unit = {}) 
     LaunchedEffect(Unit) { if (onBack == null) vm.goToday() }
     val z = remember { ZoneId.systemDefault() }
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    var hours by rememberSaveable { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onBack != null) DetailHeader("Calendar", onBack)
             else Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter), verticalAlignment = Alignment.CenterVertically) {
                 Text("Calendar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(vertical = Spacing.l))
+                if (vm.active) TextButton(onClick = { hours = !hours }) { Text(if (hours) "List" else "Hours", style = Type.label) }
                 if (vm.active) TextButton(onClick = vm::resync, enabled = !vm.syncing) {
                     Text(if (vm.syncing) "Syncing\u2026" else "Sync", style = Type.label)
                 }
@@ -120,7 +123,7 @@ fun AgendaScreen(onBack: (() -> Unit)? = null, onOpenSettings: () -> Unit = {}) 
             }
             WeekStrip(vm.day, onPick = { vm.showDay(it) }, onShift = { vm.shift(it * 7L) }, onToday = { vm.goToday() })
             PullToRefreshBox(isRefreshing = (vm.loading && vm.loaded) || vm.feedBusy, onRefresh = vm::pullRefresh, modifier = Modifier.weight(1f)) {
-                Page {
+                if (hours) CalendarHoursView(vm) else Page {
                     vm.error?.let { InlineError("Could not load events: $it", onRetry = vm::refresh) }
                     CalendarDiagnostic(vm.unsynced, onOpenSettings)
                     val isToday = vm.day == LocalDate.now()
