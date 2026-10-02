@@ -12,6 +12,10 @@ data class CalendarInfo(val id: Long, val name: String, val account: String, val
 data class CalEvent(
     val instanceId: Long, val calId: Long, val title: String, val begin: Instant, val end: Instant,
     val allDay: Boolean, val busy: Boolean, val location: String?,
+    /** True for events of a subscribed feed flagged as work (shifts). */
+    val work: Boolean = false,
+    /** Set for events from a subscribed ICS feed (calId is then negative and unique per feed). */
+    val feedId: Long? = null,
 )
 
 sealed interface AgendaItem {

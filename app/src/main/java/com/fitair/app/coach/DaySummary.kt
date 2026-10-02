@@ -32,6 +32,8 @@ data class DayFacts(
     val date: String, val steps: Long, val distanceM: Double, val cardio: Double, val zoneMin: Int,
     val waterMl: Int, val waterGoalMl: Int, val rhr: Double?, val hrAvg: Double?, val hrMax: Double?,
     val workouts: List<String>, val partial: Boolean, val hasData: Boolean = true,
+    /** Today's work-shift windows with heart-rate intensity (empty without a work calendar feed). */
+    val work: List<WorkFact> = emptyList(),
 )
 
 /** [source] is "llm" or "template". */
@@ -71,8 +73,17 @@ object DaySummary {
             rhr = rhr, hrAvg = ser?.hrMean, hrMax = ser?.hrMax, workouts = workouts,
             partial = live == null || CardioLoad.isPartial(live.coverage),
             hasData = steps > 0 || ser?.hrMean != null,
+            work = workFacts(ctx, date, z),
         )
     }
+
+    /** Work windows of [date] as summary facts; empty without a work feed. Clock times are local. */
+    fun workFacts(ctx: Context, date: LocalDate, z: ZoneId): List<WorkFact> = try {
+        com.fitair.app.analytics.WorkIntensity.forDay(ctx, date).map { w ->
+            fun clk(ms: Long) = java.time.Instant.ofEpochMilli(ms).atZone(z).let { TodayBriefLogic.clock(it.hour, it.minute) }
+            WorkFact(clk(w.startMs), clk(w.endMs), w.hours, w.avgHr, w.avgPctHrr, w.avgHr?.let { w.minutesZone2Plus }, w.load?.let { Math.round(it).toInt() })
+        }
+    } catch (e: Exception) { emptyList() }
 
     private fun usual(ctx: Context, date: LocalDate): DaySummaryLogic.Usual {
         fun median(v: List<Double>): Double? = if (v.size < 7) null else v.sorted().let { if (it.size % 2 == 1) it[it.size / 2] else (it[it.size / 2 - 1] + it[it.size / 2]) / 2 }

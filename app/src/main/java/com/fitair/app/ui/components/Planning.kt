@@ -36,12 +36,17 @@ fun SuggestionCard(title: String, reason: String, onAccept: () -> Unit, onDismis
 
 /** One calendar event: time on the left, optional calendar colour dot, title; tentative (non-busy) events render dimmed. */
 @Composable
-fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modifier = Modifier, dot: Color? = null) {
+fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modifier = Modifier, dot: Color? = null, tag: String? = null) {
     val c = if (busy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(time, style = Type.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(104.dp))
         if (dot != null) { StatusDot(dot); Spacer(Modifier.width(Spacing.s)) }
-        Text(title, style = Type.body, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, style = Type.body, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (tag != null) {
+            Spacer(Modifier.width(Spacing.s))
+            Text(tag, style = Type.chip, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                modifier = Modifier.clip(Shapes.pill).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)).padding(horizontal = 8.dp, vertical = 1.dp))
+        }
     }
 }
 

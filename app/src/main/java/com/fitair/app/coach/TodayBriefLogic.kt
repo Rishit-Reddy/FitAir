@@ -27,10 +27,10 @@ object TodayBriefLogic {
      * Mode + readiness/5 + sleep minutes/15 + load/10 + water/250 ml + next event + insight set (+ tomorrow's first event, which the
      * evening bullets name). Small moves stay inside one bucket, so they never trigger a new call.
      */
-    fun hash(f: BriefFacts): String = listOf(
+    fun hash(f: BriefFacts): String = (listOf(
         f.mode.name, bucket(f.readiness, 5), bucket(f.sleepAsleepMin, 15), bucket(f.loadSoFar, 10), bucket(f.waterMl, 250),
         eventId(f.nextEvent), f.insightIds.sorted().joinToString("+").ifEmpty { "-" }, eventId(f.tomorrowFirst),
-    ).joinToString("|")
+    ) + (if (f.work.isEmpty()) emptyList() else listOf("w" + f.work.joinToString(",") { it.startClock + "-" + it.endClock + "/" + bucket(it.avgPctHrr, 5) }))).joinToString("|")
 
     // ---- what to do on open -------------------------------------------------------------------------------------
 
@@ -58,7 +58,7 @@ object TodayBriefLogic {
     /** Clock times the text may quote: event starts, bedtime, and the current time (exact and rounded down to the hour). */
     fun allowedClocks(f: BriefFacts, nowClock: String?): Set<String> {
         val out = HashSet<String>()
-        listOfNotNull(f.nextEvent?.startClock, f.tomorrowFirst?.startClock, f.bedtime, nowClock).forEach { c -> clockOf(c)?.let { out.add(it) } }
+        (listOfNotNull(f.nextEvent?.startClock, f.tomorrowFirst?.startClock, f.bedtime, nowClock) + f.work.flatMap { listOf(it.startClock, it.endClock) }).forEach { c -> clockOf(c)?.let { out.add(it) } }
         nowClock?.let { c -> clockOf(c)?.let { out.add(it.substring(0, 2) + ":00") } }
         return out
     }
@@ -91,6 +91,7 @@ object TodayBriefLogic {
             DaySummaryLogic.numbersIn(e.title).forEach { out.add(it.value) }
         }
         duration(f.bedtimeForMin)
+        WorkFact.numbers(f.work).forEach { out.add(it) }
         return out
     }
 
@@ -180,6 +181,7 @@ If "partial_day" is true, say the numbers may be incomplete in one bullet.
         f.tomorrowFirst?.let { o.put("tomorrow_first_event", ev(it)) }
         f.bedtime?.let { b -> o.put("bedtime", JSONObject().put("at", b).also { j -> f.bedtimeForMin?.let { j.put("for_min", it) } }) }
         if (f.insightIds.isNotEmpty()) o.put("notable", JSONArray(f.insightIds.map { it.replace('_', ' ') }))
+        if (f.work.isNotEmpty()) o.put("work_shift", WorkFact.listJson(f.work))
         o.put("partial_day", f.partial)
         return o
     }

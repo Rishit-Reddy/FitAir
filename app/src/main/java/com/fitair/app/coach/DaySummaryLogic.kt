@@ -5,6 +5,34 @@ import org.json.JSONObject
 import java.util.Locale
 
 /** Pure parts of the evening Day summary (docs/PLAN_081.md 7.2): prompt, number validator, reply parsing. No android.* imports. */
+/** Today's work window (a shift from a work-flagged calendar feed) as the summaries may mention it. Stats are null when heart-rate coverage was too low. */
+class WorkFact(
+    val startClock: String, val endClock: String, val hours: Double, val avgHr: Int?, val avgPctHrr: Int?, val zone2Min: Int?, val load: Int?,
+) {
+    fun toJson(): JSONObject = JSONObject().put("from", startClock).put("to", endClock).put("hours", hours).also { o ->
+        avgHr?.let { o.put("avg_hr", it) }; avgPctHrr?.let { o.put("avg_percent_of_heart_rate_reserve", it) }
+        zone2Min?.let { o.put("minutes_zone2_plus", it) }; load?.let { o.put("cardio_load", it) }
+    }
+
+    companion object {
+        const val NOTE = "physical work shift (cycling deliveries), not a workout; intensity is relative to his own heart-rate reserve"
+
+        fun listJson(w: List<WorkFact>): JSONObject = JSONObject().put("note", NOTE).put("windows", JSONArray(w.map { it.toJson() }))
+
+        /** Numbers (and unit variants) a text may quote about [w]. Clock times are handled by the clock validator. */
+        fun numbers(w: List<WorkFact>): List<Double> {
+            val out = ArrayList<Double>()
+            fun add(v: Double?) { if (v != null) { out.add(v); out.add(Math.rint(v)); out.add(Math.round(v * 10) / 10.0) } }
+            for (x in w) {
+                add(x.hours); add(x.avgHr?.toDouble()); add(x.avgPctHrr?.toDouble()); add(x.load?.toDouble())
+                x.zone2Min?.let { add(it.toDouble()); add((it / 60).toDouble()); add((it % 60).toDouble()); add(it / 60.0) }
+                add(Math.floor(x.hours)); add(Math.round((x.hours - Math.floor(x.hours)) * 60).toDouble())
+            }
+            return out
+        }
+    }
+}
+
 object DaySummaryLogic {
     /** The user's own typical values, passed to the model so it can compare "with his usual". */
     data class Usual(val steps: Long?, val cardio: Double?)
@@ -34,6 +62,7 @@ No guilt, no exclamation marks, no medical claims or diagnoses, no new plans for
         f.rhr?.let { o.put("resting_hr", Math.round(it)) }
         f.hrAvg?.let { o.put("avg_hr", Math.round(it)) }
         f.hrMax?.let { o.put("max_hr", Math.round(it)) }
+        if (f.work.isNotEmpty()) o.put("work_shift", WorkFact.listJson(f.work))
         val usual = JSONObject()
         u.steps?.let { usual.put("steps", it) }
         u.cardio?.let { usual.put("cardio_load", Math.round(it)) }
@@ -64,6 +93,7 @@ No guilt, no exclamation marks, no medical claims or diagnoses, no new plans for
         add(f.waterMl.toDouble()); add(f.waterMl / 1000.0); add(f.waterGoalMl.toDouble()); add(f.waterGoalMl / 1000.0)
         add(f.rhr); add(f.hrAvg); add(f.hrMax)
         add(u.steps?.toDouble()); add(u.cardio)
+        WorkFact.numbers(f.work).forEach { out.add(it) }
         for (w in f.workouts) NUM.findAll(w).forEach { m ->
             val frac = m.groupValues[2]
             out.add((m.groupValues[1].replace(",", "") + if (frac.isEmpty()) "" else ".$frac").toDouble())

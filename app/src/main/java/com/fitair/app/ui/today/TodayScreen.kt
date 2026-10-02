@@ -277,7 +277,21 @@ private fun DetailsSheet(facts: com.fitair.app.coach.DayFacts?, onDismiss: () ->
 /** Next up (Morning, Day) or "Tomorrow 08:00 Shift" (Evening) as a slim strip; a calendar prompt without permission. */
 @Composable
 private fun NextUpStripBlock(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
-    if (!agenda.hasPerm) {
+    Column(Modifier.fillMaxWidth()) {
+        NextUpStripOnly(agenda, mode, nowMs, onOpenCalendar, onRequest)
+        if (agenda.active && agenda.loaded && mode != Mode.Morning) {
+            val z = remember { ZoneId.systemDefault() }
+            val s = agenda.shiftToday(nowMs)
+            val line = s?.let { Copy.shiftTodayLine(AgendaFormat.range(Instant.ofEpochMilli(it.startMs), Instant.ofEpochMilli(it.endMs), z), it.avgPctHrr) }
+            if (line != null) Text(line, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(start = Spacing.l, top = Spacing.s))
+        }
+    }
+}
+
+@Composable
+private fun NextUpStripOnly(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
+    if (!agenda.active) {
         Row(
             Modifier.fillMaxWidth().clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer).heightIn(min = 64.dp).padding(start = Spacing.l, end = Spacing.s),
             verticalAlignment = Alignment.CenterVertically,
@@ -292,7 +306,7 @@ private fun NextUpStripBlock(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCa
     val n = if (mode == Mode.Evening) null else AgendaFormat.nextUp(agenda.todayItems, Instant.ofEpochMilli(nowMs))
     if (n != null) {
         NextUpStrip("Next up", n.e.title.ifBlank { "Busy" }, AgendaFormat.nextUpLine(n, z),
-            agenda.colors[n.e.calId]?.let { Color(it) }, n.running, onOpenCalendar)
+            agenda.colors.of(n.e)?.let { Color(it) }, n.running, onOpenCalendar)
     } else {
         val tomorrow = AgendaFormat.tomorrowLine(agenda.tomorrow, z)
         NextUpStrip(if (mode == Mode.Evening) "Next up" else "Free for the rest of the day", tomorrow ?: "Nothing scheduled tomorrow", null, null, false, onOpenCalendar)
@@ -324,7 +338,7 @@ private fun AgendaBlock(vm: AgendaVm, rest: Boolean, onOpen: () -> Unit, onReque
     Box(Modifier.heightIn(min = Spacing.minTouch).clickable(role = Role.Button, onClick = onOpen), contentAlignment = Alignment.CenterStart) {
         SectionHeader(if (rest) "Rest of today ›" else "Agenda ›")
     }
-    if (!vm.hasPerm) { CalendarPrompt(onRequest); return }
+    if (!vm.active) { CalendarPrompt(onRequest); return }
     if (!vm.loaded) return
     CalendarDiagnostic(vm.unsynced, onSettings)
     if (!AgendaFormat.hasEvents(vm.todayItems)) { Text(AgendaFormat.emptyLine(), style = Type.body, color = dim); return }

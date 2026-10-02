@@ -15,6 +15,7 @@ import com.fitair.app.data.dao.Pace
 import com.fitair.app.data.metrics.MetricsRepo
 import com.fitair.app.data.metrics.MetricSnapshot
 import com.fitair.app.integrations.calendar.CalendarRepo
+import com.fitair.app.integrations.calendar.ics.IcsFeeds
 import com.fitair.app.secure.SecretStore
 import com.fitair.app.ui.copy.Copy
 import com.fitair.app.ui.today.Mode
@@ -57,6 +58,8 @@ class BriefFacts(
     val bedtime: String? = null, val bedtimeForMin: Int? = null,
     val insightIds: List<String> = emptyList(),
     val partial: Boolean = false,
+    /** Today's work-shift windows with heart-rate intensity (empty without a work calendar feed). */
+    val work: List<WorkFact> = emptyList(),
 )
 
 /** [source] is "llm" or "template". */
@@ -124,21 +127,26 @@ object TodayBrief {
 
     private fun short(t: String) = t.trim().ifEmpty { "Busy" }.let { if (it.length <= 30) it else it.take(29).trimEnd() + "…" }
 
+    /** Title of [e] as the model may see it: events of a subscribed feed that does not share titles read "Busy". */
+    private fun shown(e: com.fitair.app.integrations.calendar.CalEvent, feedShare: Map<Long, Boolean>): String =
+        if (e.feedId != null && feedShare[e.feedId] != true) "Busy" else e.title
+
     private suspend fun readCalendar(ctx: Context, date: LocalDate, mode: Mode): Cal? {
         val z = ZoneId.systemDefault()
         val repo = CalendarRepo(ctx)
-        if (!repo.hasPermission()) return null
+        if (!repo.hasPermission() && IcsFeeds.list(ctx).isEmpty()) return null
+        val feedShare = IcsFeeds.list(ctx).associate { it.id to it.shareTitles }
         return try {
             val now = Instant.now()
             fun ev(e: com.fitair.app.integrations.calendar.CalEvent): BriefEvent {
                 val at = e.begin.atZone(z)
                 val min = if (e.begin <= now) 0 else ((e.begin.epochSecond - now.epochSecond + 59) / 60).toInt()
-                return BriefEvent(short(e.title), TodayBriefLogic.clock(at.hour, at.minute), min)
+                return BriefEvent(short(shown(e, feedShare)), TodayBriefLogic.clock(at.hour, at.minute), min)
             }
             val today = repo.eventsForDay(date, z).filter { !it.allDay && it.end > now }.minByOrNull { it.begin }
             val tomorrow = if (mode == Mode.Evening) repo.eventsForDay(date.plusDays(1), z).filter { !it.allDay }.minByOrNull { it.begin } else null
             Cal(System.currentTimeMillis(), today?.let(::ev), tomorrow?.let { e ->
-                val at = e.begin.atZone(z); BriefEvent(short(e.title), TodayBriefLogic.clock(at.hour, at.minute), null)
+                val at = e.begin.atZone(z); BriefEvent(short(shown(e, feedShare)), TodayBriefLogic.clock(at.hour, at.minute), null)
             }).also { lastCal = it }
         } catch (e: kotlinx.coroutines.CancellationException) { throw e
         } catch (e: Exception) { AppLog.d("today brief: calendar failed: ${e.message}"); null }
@@ -183,6 +191,7 @@ object TodayBrief {
             workouts = workouts, nextEvent = cal?.next, tomorrowFirst = cal?.tomorrow,
             bedtime = wd?.let { val m = ((it.bedMin % 1440) + 1440) % 1440; Format.clock(m / 60, m % 60) }, bedtimeForMin = wd?.needMin,
             insightIds = ins, partial = lt?.partial ?: false,
+            work = DaySummary.workFacts(ctx, date, ZoneId.systemDefault()),
         )
     }
 

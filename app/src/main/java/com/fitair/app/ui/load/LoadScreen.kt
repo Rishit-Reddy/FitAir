@@ -72,6 +72,10 @@ private fun Content(vm: LoadVm, ui: LoadUi, rebuilding: Boolean, rebuildText: St
         StatRow("Moderate", "${ui.zones[1]} min")
         StatRow("Vigorous", "${ui.zones[2]} min")
         StatRow("Peak", "${ui.zones[3]} min")
+        val z = ZoneId.systemDefault()
+        ui.shifts.mapNotNull { w ->
+            Copy.shiftLoadLine(com.fitair.app.ui.agenda.AgendaFormat.range(Instant.ofEpochMilli(w.startMs), Instant.ofEpochMilli(w.endMs), z), w.avgHr, w.minutesZone2Plus, w.coverage)
+        }.forEach { Text(it, style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs)) }
         TextButton(onClick = onExplain) { Text("What is this?", style = Type.label) }
 
         SectionBreak()

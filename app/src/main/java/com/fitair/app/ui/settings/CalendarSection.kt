@@ -104,4 +104,5 @@ fun CalendarSection() {
     }
     Text("Off: the coach only sees when you are busy or free. On: event titles are sent to your AI provider too.",
         style = Type.bodySmall, color = dim)
+    CalendarLinksSection()
 }

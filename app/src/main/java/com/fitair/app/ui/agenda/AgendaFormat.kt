@@ -10,6 +10,11 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 
+/** Dot colours for event rows: device calendars by calendar id, subscribed links by link id (a link event never falls back to a calendar colour). */
+class AgendaColors(val cal: Map<Long, Int> = emptyMap(), val feed: Map<Long, Int> = emptyMap()) {
+    fun of(e: CalEvent): Int? = if (e.feedId != null) feed[e.feedId] else cal[e.calId]
+}
+
 /** Pure helpers for the agenda UI (no Android types, JVM-testable). */
 object AgendaFormat {
     /** Rows shown on Today before "Show all". */
@@ -63,7 +68,7 @@ object AgendaFormat {
     }
 
     /** "14:30–15:15 · in 40 min · location". */
-    fun nextUpLine(n: NextUp, z: ZoneId): String = listOfNotNull(range(n.e.begin, n.e.end, z), inText(n.minutes, n.running), n.e.location).joinToString(" \u00B7 ")
+    fun nextUpLine(n: NextUp, z: ZoneId): String = listOfNotNull(range(n.e.begin, n.e.end, z), inText(n.minutes, n.running), if (n.e.work) "shift" else null, n.e.location).joinToString(" \u00B7 ")
 
     /** First non-all-day event of a day, e.g. "Tomorrow 08:00 Shift start"; null if none. */
     fun tomorrowLine(events: List<CalEvent>, z: ZoneId): String? =

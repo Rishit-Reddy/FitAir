@@ -24,6 +24,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -201,6 +202,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AppLog.init(applicationContext)
         AppLog.d("app opened")
+        // calendar links: refresh the stale ones once per app open and make sure the background refresh is scheduled
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                com.fitair.app.integrations.calendar.ics.IcsFeeds.refreshIfStale(applicationContext)
+                com.fitair.app.integrations.calendar.ics.IcsFeeds.schedule(applicationContext)
+                com.fitair.app.ui.agenda.FeedSignal.bump()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { AppLog.d("calendar links: open refresh failed: ${e.message}") }
+        }
         SecretStore.migrateFromPrefs(applicationContext)
         setContent {
             val vm: MainViewModel = viewModel()

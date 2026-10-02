@@ -10,6 +10,7 @@ import android.os.Looper
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import com.fitair.app.AppLog
+import com.fitair.app.integrations.calendar.ics.IcsFeeds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.awaitClose
@@ -44,11 +45,11 @@ class CalendarRepo(private val ctx: Context) {
         ContextCompat.checkSelfPermission(app, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
 
     suspend fun calendars(): List<CalendarInfo> = withContext(Dispatchers.IO) {
-        if (!hasPermission()) return@withContext emptyList()
-        try {
+        val phone = if (!hasPermission()) emptyList() else try {
             queryCalendars(onlyVisibleSynced = false).map { it.first }
         } catch (e: SecurityException) { emptyList() }
         catch (e: Exception) { AppLog.d("calendar: calendars() failed: ${e.message}"); emptyList() }
+        phone + IcsFeeds.asCalendars(app)
     }
 
     /** Selected (or, with no choice yet, all) calendars that are not syncing to this phone. Blocking; call off the main thread. */
@@ -98,7 +99,16 @@ class CalendarRepo(private val ctx: Context) {
         catch (e: Exception) { AppLog.d("calendar: requestSync failed: ${e.message}"); 0 }
     }
 
-    suspend fun eventsForDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<CalEvent> = withContext(Dispatchers.IO) {
+    /** Phone calendars (needs READ_CALENDAR) merged with the subscribed ICS feeds (no permission needed), sorted by start. */
+    suspend fun eventsForDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<CalEvent> {
+        val phone = phoneEventsForDay(day, zone)
+        val dayStart = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val feeds = IcsFeeds.events(app, dayStart, dayEnd, zone, CalendarPrefs.selectedIds(app))
+        return if (feeds.isEmpty()) phone else (phone + feeds).sortedWith(compareBy({ it.begin }, { it.end }))
+    }
+
+    private suspend fun phoneEventsForDay(day: LocalDate, zone: ZoneId): List<CalEvent> = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext emptyList()
         try {
             val dayStart = day.atStartOfDay(zone).toInstant()
@@ -155,7 +165,7 @@ class CalendarRepo(private val ctx: Context) {
             true
         } catch (e: SecurityException) { false }
         awaitClose { if (observed) app.contentResolver.unregisterContentObserver(obs) }
-    }.buffer(kotlinx.coroutines.channels.Channel.CONFLATED).conflate().debounce(500)
+    }.let { kotlinx.coroutines.flow.merge(it, IcsFeeds.changes) }.buffer(kotlinx.coroutines.channels.Channel.CONFLATED).conflate().debounce(500)
 
     private fun queryCalendars(onlyVisibleSynced: Boolean): List<Pair<CalendarInfo, Boolean>> {
         val proj = arrayOf(

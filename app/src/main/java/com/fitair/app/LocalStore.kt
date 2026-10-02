@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
-/** Local SQLite copy of the health data plus the app tables (schema v5, see docs/ARCHITECTURE.md 3.2 and docs/PLAN_081.md 4.1). */
+/** Local SQLite copy of the health data plus the app tables (schema v6, see docs/ARCHITECTURE.md 3.2 and docs/PLAN_081.md 4.1). */
 class LocalStore private constructor(private val ctx: Context) :
     SQLiteOpenHelper(ctx.applicationContext, FILE, null, VERSION) {
 
@@ -14,7 +14,7 @@ class LocalStore private constructor(private val ctx: Context) :
 
     companion object {
         const val FILE = "fitair.db"
-        const val VERSION = 5
+        const val VERSION = 6
         /** Tables added in schema v3 (not part of the sync/backup health tables in [TABLES]). */
         val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg",
             "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary", "day_brief")
@@ -65,6 +65,7 @@ class LocalStore private constructor(private val ctx: Context) :
         createV3(db)
         createV4(db)
         createV5(db)
+        createV6(db)
         // fresh install: nothing to migrate
         db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES('$MIG_DONE','1')")
     }
@@ -125,12 +126,27 @@ class LocalStore private constructor(private val ctx: Context) :
             "bullets_json TEXT NOT NULL, source TEXT NOT NULL, model TEXT, created_ms INTEGER NOT NULL, PRIMARY KEY(date, part))")
     }
 
+    /**
+     * Schema v6: subscribed calendar (ICS) feeds. The feed URL is a secret and lives only in SecretStore ('feed_url_<id>'),
+     * never in these tables. Not part of backups or the debug bundle. Additive only.
+     */
+    private fun createV6(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS cal_feed(id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, color INTEGER NOT NULL, " +
+            "work INTEGER NOT NULL DEFAULT 0, share_titles INTEGER NOT NULL DEFAULT 0, etag TEXT, last_modified TEXT, last_ok_ms INTEGER, " +
+            "last_error TEXT, event_count INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS cal_feed_event(feed_id INTEGER NOT NULL, uid TEXT NOT NULL, rec_key TEXT NOT NULL, " +
+            "begin_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, all_day INTEGER NOT NULL, title TEXT, location TEXT, busy INTEGER NOT NULL, " +
+            "PRIMARY KEY(feed_id, uid, rec_key))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_cal_feed_event_begin ON cal_feed_event(begin_ms)")
+    }
+
     /** Cheap schema-only upgrade; the heavy heart-rate rebuild runs later in [migrateHeartRate] (IO thread). */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2(db)
         if (oldVersion < 3) createV3(db)
         if (oldVersion < 4) createV4(db)
         if (oldVersion < 5) createV5(db)
+        if (oldVersion < 6) createV6(db)
         // never drop anything here
     }
 

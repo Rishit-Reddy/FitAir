@@ -27,6 +27,7 @@ class LoadUi(
     val ratio: Double?,
     val hrMax: CardioLoad.HrMax,
     val sessions: List<SessionRow>,
+    val shifts: List<com.fitair.app.analytics.WorkWindowStats> = emptyList(),   // today's work windows with heart-rate figures
 )
 
 /** State of the Load screen. Everything is read from the local DB; verdict wording comes from Copy. */
@@ -62,6 +63,7 @@ class LoadVm(app: Application) : AndroidViewModel(app) {
             zones = intArrayOf(live?.zLight ?: 0, live?.zMod ?: 0, live?.zVig ?: 0, live?.zPeak ?: 0),
             days = days, ratio = lt.ratio ?: rows.values.lastOrNull { it.ratio != null }?.ratio,
             hrMax = LoadDao.hrMax(ctx), sessions = LoadDao.sessionRows(ctx, today.minusDays(13), today),
+            shifts = runCatching { com.fitair.app.analytics.WorkIntensity.forDay(ctx, today) }.getOrDefault(emptyList()),
         )
     }
 

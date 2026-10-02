@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fitair.app.integrations.calendar.AgendaItem
 import com.fitair.app.ui.components.*
@@ -58,10 +59,11 @@ fun rememberCalendarPermissionRequest(onResult: (Boolean) -> Unit = {}): () -> U
 @Composable
 fun AgendaLive(vm: AgendaVm) {
     val owner = LocalLifecycleOwner.current
-    LaunchedEffect(owner, vm.hasPerm) {
+    LaunchedEffect(owner, vm.hasPerm, vm.hasFeeds) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             vm.refresh()
-            if (vm.hasPerm) vm.changes().collect { vm.refresh() }
+            if (vm.hasPerm) launch { vm.changes().collect { vm.refresh() } }
+            FeedSignal.tick.collect { vm.refresh() }
         }
     }
 }
@@ -100,22 +102,24 @@ fun AgendaScreen(onBack: (() -> Unit)? = null, onOpenSettings: () -> Unit = {}) 
             if (onBack != null) DetailHeader("Calendar", onBack)
             else Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter), verticalAlignment = Alignment.CenterVertically) {
                 Text("Calendar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(vertical = Spacing.l))
-                if (vm.hasPerm) TextButton(onClick = vm::resync, enabled = !vm.syncing) {
+                if (vm.active) TextButton(onClick = vm::resync, enabled = !vm.syncing) {
                     Text(if (vm.syncing) "Syncing\u2026" else "Sync", style = Type.label)
                 }
             }
             vm.syncNote?.let {
                 Text(it, style = Type.bodySmall, color = dim, modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs))
             }
-            if (!vm.hasPerm) {
+            if (!vm.active) {
                 Column(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xl)) {
                     Text("See your events next to your readiness.", style = Type.body, color = dim)
                     TextButton(onClick = request) { Text("Show my calendar", style = Type.label) }
+                    Text("Or paste a calendar link in Settings.", style = Type.bodySmall, color = dim)
+                    TextButton(onClick = onOpenSettings) { Text("Open settings", style = Type.label) }
                 }
                 return@Column
             }
             WeekStrip(vm.day, onPick = { vm.showDay(it) }, onShift = { vm.shift(it * 7L) }, onToday = { vm.goToday() })
-            PullToRefreshBox(isRefreshing = vm.loading && vm.loaded, onRefresh = vm::refresh, modifier = Modifier.weight(1f)) {
+            PullToRefreshBox(isRefreshing = (vm.loading && vm.loaded) || vm.feedBusy, onRefresh = vm::pullRefresh, modifier = Modifier.weight(1f)) {
                 Page {
                     vm.error?.let { InlineError("Could not load events: $it", onRetry = vm::refresh) }
                     CalendarDiagnostic(vm.unsynced, onOpenSettings)
@@ -158,10 +162,10 @@ fun CalendarDiagnostic(unsynced: Int, onOpen: () -> Unit) {
 
 /** The "Next up" card from today's items, or "Free for the rest of the day" plus tomorrow's first event. */
 @Composable
-fun NextUpBlock(todayItems: List<AgendaItem>, tomorrow: List<com.fitair.app.integrations.calendar.CalEvent>, colors: Map<Long, Int>, z: ZoneId, onClick: (() -> Unit)?) {
+fun NextUpBlock(todayItems: List<AgendaItem>, tomorrow: List<com.fitair.app.integrations.calendar.CalEvent>, colors: AgendaColors, z: ZoneId, onClick: (() -> Unit)?) {
     val n = AgendaFormat.nextUp(todayItems, Instant.now())
     if (n != null) {
-        NextUpCard(n.e.title.ifBlank { "Busy" }, AgendaFormat.nextUpLine(n, z), colors[n.e.calId]?.let { Color(it) }, n.running, null, onClick)
+        NextUpCard(n.e.title.ifBlank { "Busy" }, AgendaFormat.nextUpLine(n, z), colors.of(n.e)?.let { Color(it) }, n.running, null, onClick)
     } else {
         NextUpCard(null, null, null, false, AgendaFormat.tomorrowLine(tomorrow, z) ?: "Nothing scheduled tomorrow", onClick)
     }
@@ -208,7 +212,7 @@ private fun WeekStrip(day: LocalDate, onPick: (LocalDate) -> Unit, onShift: (Int
 
 /** Timeline rows; with [markNow] a hairline "now" marker sits between the running events and the ones to come. */
 @Composable
-fun AgendaList(items: List<AgendaItem>, colors: Map<Long, Int>, z: ZoneId, withEnd: Boolean, markNow: Boolean) {
+fun AgendaList(items: List<AgendaItem>, colors: AgendaColors, z: ZoneId, withEnd: Boolean, markNow: Boolean) {
     val now = Instant.now()
     val lastStarted = if (!markNow) -1 else items.indexOfLast { it is AgendaItem.Event && !it.e.allDay && it.e.begin <= now }
     items.forEachIndexed { i, it ->
@@ -227,12 +231,12 @@ private fun NowMarker() {
 
 /** One timeline row: an event (with its calendar colour dot) or a free gap. */
 @Composable
-fun AgendaItemRow(item: AgendaItem, colors: Map<Long, Int>, z: ZoneId, withEnd: Boolean) {
+fun AgendaItemRow(item: AgendaItem, colors: AgendaColors, z: ZoneId, withEnd: Boolean) {
     when (item) {
         is AgendaItem.Event -> {
             val e = item.e
             AgendaRow(AgendaFormat.eventTime(e, z, withEnd), e.title.ifBlank { "Busy" }, busy = e.busy,
-                dot = colors[e.calId]?.let { Color(it) })
+                dot = colors.of(e)?.let { Color(it) }, tag = if (e.work) "shift" else null)
         }
         is AgendaItem.Gap -> FreeGapRow(AgendaFormat.range(item.from, item.to, z))
     }

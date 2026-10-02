@@ -434,4 +434,99 @@ object Copy {
             else -> Chip("Heavier than usual", Tone.Caution, "Heavier")
         }
     }
+
+    // ---- calendar links and shifts (0.9.1) ---------------------------------------------------------------------
+
+    /** How hard a shift was, from the average share of the heart-rate range (0-100). Plain thresholds, no medical meaning. */
+    enum class ShiftEffort(val word: String) { Easy("easy"), Steady("steady"), Hard("hard") }
+
+    fun shiftEffort(avgPctHrr: Int): ShiftEffort = when {
+        avgPctHrr < 40 -> ShiftEffort.Easy
+        avgPctHrr < 60 -> ShiftEffort.Steady
+        else -> ShiftEffort.Hard
+    }
+
+    /** Today's slim line: "Shift 10:00–15:00 · hard (avg 71% of your range)". Null without a figure. */
+    fun shiftTodayLine(range: String, avgPctHrr: Int?): String? {
+        val pct = avgPctHrr?.coerceIn(0, 100) ?: return null
+        return "Shift $range \u00B7 ${shiftEffort(pct).word} (avg $pct% of your range)"
+    }
+
+    /** "2 h 10" / "2 h" / "45 min". */
+    fun hoursMinutes(min: Int): String {
+        val m = maxOf(0, min)
+        return when {
+            m >= 60 && m % 60 != 0 -> "${m / 60} h ${m % 60}"
+            m >= 60 -> "${m / 60} h"
+            else -> "$m min"
+        }
+    }
+
+    /** Below this share of the window with heart-rate data the Load line stays hidden. */
+    const val SHIFT_MIN_COVERAGE = 0.3
+
+    /** Load screen: "Shift 10:00–15:00 · avg 128 bpm · 2 h 10 in the harder zones". Null (hidden) with no data or thin coverage. */
+    fun shiftLoadLine(range: String, avgHr: Int?, minutesZone2Plus: Int, coverage: Double?): String? {
+        if (avgHr == null || avgHr <= 0) return null
+        if (coverage != null && coverage < SHIFT_MIN_COVERAGE) return null
+        val zones = if (minutesZone2Plus <= 0) "no time in the harder zones" else "${hoursMinutes(minutesZone2Plus)} in the harder zones"
+        return "Shift $range \u00B7 avg $avgHr bpm \u00B7 $zones"
+    }
+
+    /** "just now" / "12 min ago" / "3 h ago" / "2 days ago"; null when never. */
+    fun updatedAgo(lastOkMs: Long?, nowMs: Long): String? {
+        if (lastOkMs == null) return null
+        val min = maxOf(0L, (nowMs - lastOkMs) / 60_000L)
+        return when {
+            min < 1 -> "just now"
+            min < 60 -> "$min min ago"
+            min < 24 * 60 -> "${min / 60} h ago"
+            else -> (min / (24 * 60)).let { if (it == 1L) "1 day ago" else "$it days ago" }
+        }
+    }
+
+    private val URL_IN_TEXT = Regex("(?i)(https?|webcals?|webcal)://\\S+")
+
+    /** Error text for the screen: any address in it is replaced, so the secret link never shows. */
+    fun hideUrls(text: String): String = text.replace(URL_IN_TEXT, "the link").trim()
+
+    fun eventsWord(n: Int): String = if (n == 1) "1 event" else "$n events"
+
+    /** Settings row, second line: "23 events · updated 12 min ago", or the problem in plain words. Never the URL. */
+    fun feedStatus(eventCount: Int, lastOkMs: Long?, lastError: String?, nowMs: Long): String {
+        val ago = updatedAgo(lastOkMs, nowMs)
+        if (!lastError.isNullOrBlank()) {
+            return "Could not update: ${hideUrls(lastError)}" + (ago?.let { " \u00B7 last worked $it" } ?: "")
+        }
+        if (ago == null) return "Not fetched yet"
+        return "${eventsWord(eventCount)} \u00B7 updated $ago"
+    }
+
+    /** "Mon 10:00" for the preview line. */
+    fun dayClock(begin: java.time.Instant, zone: java.time.ZoneId): String =
+        begin.atZone(zone).let { java.time.format.DateTimeFormatter.ofPattern("EEE HH:mm", Locale.ENGLISH).format(it) }
+
+    /** The "Check link" result: "Found 23 events · next: Delivery Mon 10:00", or the error. */
+    fun previewLine(events: Int, nextTitle: String?, nextWhen: String?, error: String?): String {
+        if (!error.isNullOrBlank()) return hideUrls(error)
+        if (events <= 0) return "The link works, but it has no events yet."
+        val t = nextTitle?.trim().orEmpty().ifEmpty { "Busy" }.let { if (it.length > 28) it.take(27).trimEnd() + "\u2026" else it }
+        return "Found ${eventsWord(events)}" + (nextWhen?.let { " \u00B7 next: $t $it" } ?: "")
+    }
+
+    /** What the person pasted, tidied: whitespace and quotes removed, webcal:// turned into https://. Empty stays empty. */
+    fun cleanLinkInput(raw: String): String {
+        var s = raw.filter { !it.isWhitespace() }.trim('"', '\'', '<', '>')
+        if (s.startsWith("webcal://", ignoreCase = true)) s = "https://" + s.substring(9)
+        else if (s.startsWith("webcals://", ignoreCase = true)) s = "https://" + s.substring(10)
+        return s
+    }
+
+    /** Null when [clean] is empty (no message yet) or looks fine; otherwise a plain-words problem. */
+    fun linkInputProblem(clean: String): String? = when {
+        clean.isEmpty() -> null
+        clean.startsWith("https://", ignoreCase = true) && clean.length > 12 && '.' in clean -> null
+        clean.startsWith("http://", ignoreCase = true) -> "Use a link that starts with https:// (or webcal://)."
+        else -> "That does not look like a calendar link. It should start with https:// or webcal://."
+    }
 }

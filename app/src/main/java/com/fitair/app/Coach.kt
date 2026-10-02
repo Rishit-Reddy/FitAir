@@ -3,6 +3,7 @@ package com.fitair.app
 import android.content.Context
 import com.fitair.app.coach.*
 import com.fitair.app.integrations.calendar.*
+import com.fitair.app.integrations.calendar.ics.IcsFeeds
 import com.fitair.app.data.dao.AiCallDao
 import com.fitair.app.data.dao.AiCallRow
 import com.fitair.app.secure.SecretStore
@@ -108,6 +109,8 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolSpec("get_agenda", "The user's calendar for one date: events (start/end local ISO, title, all_day, busy) and free_gaps (from/to, minutes) of 45+ min between 07:00 and 22:00 after now. Titles may be redacted as 'Busy'. Empty if calendar access is off.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
+        ToolSpec("get_work_windows", "The user's work shifts (physical work: cycling deliveries, NOT workouts) from his work calendar, per day, with heart-rate intensity inside each shift: hours, avg_hr_bpm, avg_pct_hr_reserve (percent of HIS heart-rate reserve), zone2plus_min (minutes at 40%+ of reserve), cardio_load, hr_coverage (0-1; stats are omitted below 0.5). Range of at most 14 days. Empty if no work calendar is linked.",
+            listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
     )
 
     /** Legacy entry used by MainViewModel: returns the answer as displayable text. */
@@ -228,6 +231,7 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
             "get_load" -> "looked up cardio load ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_water" -> "looked up water ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_agenda" -> "looked up calendar for ${d(a.optString("date"))}"
+            "get_work_windows" -> "looked up work shifts ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             else -> "called $name"
         }
     }
@@ -247,6 +251,9 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
     private suspend fun agenda(dateStr: String): JSONObject {
         val day = try { LocalDate.parse(dateStr) } catch (e: Exception) { throw org.json.JSONException("date must be YYYY-MM-DD") }
         val share = prefs.getBoolean("coach_share_titles", false)
+        // events of a subscribed feed follow that feed's own 'share titles' switch
+        val feedShare = IcsFeeds.list(ctx).associate { it.id to it.shareTitles }
+        fun shared(e: CalEvent) = if (e.feedId != null) feedShare[e.feedId] == true else share
         val repo = CalendarRepo(ctx)
         val evs = repo.eventsForDay(day, zone)
         val ds = day.atStartOfDay(zone).toInstant()
@@ -255,12 +262,38 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         val events = JSONArray(); val gaps = JSONArray()
         for (it in items) when (it) {
             is AgendaItem.Event -> events.put(JSONObject().put("start", t(it.e.begin)).put("end", t(it.e.end))
-                .put("title", if (share) it.e.title else "Busy").put("all_day", it.e.allDay).put("busy", it.e.busy)
-                .also { o -> if (share && it.e.location != null) o.put("location", it.e.location) })
+                .put("title", if (shared(it.e)) it.e.title else "Busy").put("all_day", it.e.allDay).put("busy", it.e.busy)
+                .also { o -> if (shared(it.e) && it.e.location != null) o.put("location", it.e.location) })
             is AgendaItem.Gap -> gaps.put(JSONObject().put("from", t(it.from)).put("to", t(it.to))
                 .put("minutes", java.time.Duration.between(it.from, it.to).toMinutes()))
         }
         return JSONObject().put("date", day.toString()).put("events", events).put("free_gaps", gaps)
+    }
+
+    private fun workWindows(fromS: String, toS: String): JSONObject {
+        val from = try { LocalDate.parse(fromS) } catch (e: Exception) { throw org.json.JSONException("from must be YYYY-MM-DD") }
+        val to = try { LocalDate.parse(toS) } catch (e: Exception) { throw org.json.JSONException("to must be YYYY-MM-DD") }
+        if (to < from || to.toEpochDay() - from.toEpochDay() > 13) throw org.json.JSONException("range must be 0..13 days and from <= to")
+        val days = JSONArray()
+        var d = from
+        while (d <= to) {
+            val ws = com.fitair.app.analytics.WorkIntensity.forDay(ctx, d)
+            if (ws.isNotEmpty()) {
+                val arr = JSONArray()
+                for (w in ws) {
+                    fun clk(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().withSecond(0).withNano(0).toString()
+                    val o = JSONObject().put("from", clk(w.startMs)).put("to", clk(w.endMs)).put("hours", w.hours)
+                    if (w.label.isNotBlank()) o.put("label", w.label.take(24))
+                    w.avgHr?.let { o.put("avg_hr_bpm", it) }; w.avgPctHrr?.let { o.put("avg_pct_hr_reserve", it) }
+                    if (w.avgHr != null) o.put("zone2plus_min", w.minutesZone2Plus)
+                    w.load?.let { o.put("cardio_load", it) }; w.coverage?.let { o.put("hr_coverage", it) }
+                    arr.put(o)
+                }
+                days.put(JSONObject().put("date", d.toString()).put("shifts", arr))
+            }
+            d = d.plusDays(1)
+        }
+        return JSONObject().put("days", days).put("note", "work shifts (cycling deliveries), not workouts; intensity is relative to the user's own heart-rate reserve; missing stats = too little heart-rate data")
     }
 
     private fun water(fromS: String, toS: String): JSONObject {
@@ -282,6 +315,11 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         return try {
             if (name == "get_agenda") {
                 val out = compact(agenda(args.getString("date")))
+                AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
+                return out
+            }
+            if (name == "get_work_windows") {
+                val out = compact(workWindows(args.getString("from"), args.getString("to")))
                 AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
                 return out
             }
