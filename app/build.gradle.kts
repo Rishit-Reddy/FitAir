@@ -12,8 +12,8 @@ android {
         applicationId = "com.fitair.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.7.5"
+        versionCode = 15
+        versionName = "0.8.0"
     }
 
     signingConfigs {

@@ -35,9 +35,9 @@ class AgendaVm(app: Application) : AndroidViewModel(app) {
 
     fun changes(): Flow<Unit> = repo.changes()
 
-    fun goToday() { if (day != LocalDate.now()) setDay(LocalDate.now()) }
-    fun setDay(d: LocalDate) { day = d; refresh() }
-    fun shift(days: Long) = setDay(day.plusDays(days))
+    fun goToday() { if (day != LocalDate.now()) showDay(LocalDate.now()) }
+    fun showDay(d: LocalDate) { day = d; refresh() }
+    fun shift(days: Long) = showDay(day.plusDays(days))
 
     fun refresh() {
         hasPerm = repo.hasPermission()

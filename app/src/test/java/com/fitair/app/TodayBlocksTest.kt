@@ -15,13 +15,13 @@ class TodayBlocksTest {
         TodayUi(LocalDate.of(2026, 10, 2), null, 0L, emptyList(), night, insights, true)
 
     @Test fun full() = assertEquals(
-        listOf(TodayBlock.Readiness, TodayBlock.Sleep, TodayBlock.Vitals, TodayBlock.Insights), todayBlocks(ui()))
+        listOf(TodayBlock.Readiness, TodayBlock.Agenda, TodayBlock.Sleep, TodayBlock.Vitals, TodayBlock.Insights), todayBlocks(ui()))
 
     @Test fun noNightDropsSleep() = assertEquals(
-        listOf(TodayBlock.Readiness, TodayBlock.Vitals, TodayBlock.Insights), todayBlocks(ui(night = null)))
+        listOf(TodayBlock.Readiness, TodayBlock.Agenda, TodayBlock.Vitals, TodayBlock.Insights), todayBlocks(ui(night = null)))
 
     @Test fun noInsightsDropsInsights() = assertEquals(
-        listOf(TodayBlock.Readiness, TodayBlock.Sleep, TodayBlock.Vitals), todayBlocks(ui(insights = emptyList())))
+        listOf(TodayBlock.Readiness, TodayBlock.Agenda, TodayBlock.Sleep, TodayBlock.Vitals), todayBlocks(ui(insights = emptyList())))
 
     @Test fun readinessFirst() {
         assertEquals(TodayBlock.Readiness, todayBlocks(ui(null, emptyList())).first())

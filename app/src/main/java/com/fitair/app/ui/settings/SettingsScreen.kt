@@ -76,6 +76,8 @@ private fun GeneralTab(vm: MainViewModel) = Page {
     Text("Keys are stored encrypted on this device. Questions and the health numbers they need are sent to the provider you pick.",
         style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SectionBreak()
+    CalendarSection()
+    SectionBreak()
     SectionHeader("Google Drive")
     Spacer(Modifier.height(Spacing.s))
     BackupSection()
