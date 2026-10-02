@@ -42,7 +42,7 @@ fun DaySnippets(agenda: AgendaVm, sleepEndMs: Long?, nowMs: Long, onOpen: () -> 
         ?: (if (events.any { !it.allDay }) "Nothing more today" else "No events today")
     val showTomorrow = CalendarDay.showTomorrow(LocalDateTime.now(), events)
     Column(modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpen), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        DayStrip(events, agenda.shifts, sleepEndMs, nowMs)
+        DayStrip(events, agenda.shifts, agenda.colors, sleepEndMs, nowMs)
         Text(nextLine, style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
         TodayLines.tasks(events)?.let { Text(it, style = Type.bodySmall, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         if (showTomorrow) TodayLines.tomorrow(agenda.tomorrow, z)?.let { Text(it, style = Type.bodySmall, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis) }

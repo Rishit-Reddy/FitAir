@@ -85,6 +85,8 @@ class SyncRepo(private val context: Context) {
         } catch (e: Throwable) { AppLog.d("water import skipped: ${e.javaClass.simpleName}: ${e.message}") }
         try { com.fitair.app.notify.WaterAlarm.flushHealthConnect(context) } catch (e: kotlinx.coroutines.CancellationException) { throw e
         } catch (e: Throwable) { AppLog.d("water flush skipped: ${e.javaClass.simpleName}: ${e.message}") }
+        try { com.fitair.app.data.WeightSync.sync(context) } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Throwable) { AppLog.d("weight sync skipped: ${e.javaClass.simpleName}: ${e.message}") }
         val tA = System.currentTimeMillis()
         try {
             DailyMetrics.recomputeRecent(context, 14)

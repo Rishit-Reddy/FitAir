@@ -97,6 +97,10 @@ fun LogScreen(vm: MainViewModel) {
     var notes by remember { mutableStateOf("") }
 
     Page {
+        com.fitair.app.ui.weight.WeightEntry()
+        Spacer(Modifier.height(16.dp))
+        Hairline()
+        Spacer(Modifier.height(16.dp))
         Caption("Pickleball")
         val elapsed = when {
             start == null -> 0L
