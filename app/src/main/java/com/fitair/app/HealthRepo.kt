@@ -163,7 +163,7 @@ class HealthRepo(private val context: Context) {
                 )
             )
             resp.records.forEach(onRecord)
-            token = resp.pageToken.takeIf { it.isNotEmpty() }
+            token = resp.pageToken?.takeIf { it.isNotEmpty() }
         } while (token != null)
     }
 
@@ -264,7 +264,8 @@ class HealthRepo(private val context: Context) {
             endTime = end,
             endZoneOffset = ZoneId.systemDefault().rules.getOffset(end),
             metadata = Metadata.manualEntry(),
-            exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_PICKLEBALL,
+            // No EXERCISE_TYPE_PICKLEBALL in connect-client 1.1.0; TENNIS is the closest racquet-sport type.
+            exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_TENNIS,
             title = title,
             notes = notes,
         )
