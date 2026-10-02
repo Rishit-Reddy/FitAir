@@ -1,0 +1,283 @@
+package com.fitair.app
+
+import android.content.Context
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.OxygenSaturationRecord
+import androidx.health.connect.client.records.Record
+import androidx.health.connect.client.records.RespiratoryRateRecord
+import androidx.health.connect.client.records.RestingHeartRateRecord
+import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
+import androidx.health.connect.client.records.Vo2MaxRecord
+import androidx.health.connect.client.records.metadata.Metadata
+import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Energy
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import kotlin.reflect.KClass
+
+object HealthPerms {
+    val read: Set<String> = setOf(
+        HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(DistanceRecord::class),
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(RestingHeartRateRecord::class),
+        HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+        HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(RespiratoryRateRecord::class),
+        HealthPermission.getReadPermission(Vo2MaxRecord::class),
+        HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY,
+    )
+    val write: Set<String> = setOf(
+        HealthPermission.getWritePermission(ExerciseSessionRecord::class),
+        HealthPermission.getWritePermission(TotalCaloriesBurnedRecord::class),
+    )
+    val all: Set<String> = read + write
+}
+
+data class TodayStats(
+    val steps: Long,
+    val distanceM: Double,
+    val activeKcal: Double?,
+    val hrAvg: Long?,
+    val hrMin: Long?,
+    val hrMax: Long?,
+    val restingHr: Long?,
+    val hrvMs: Double?,
+    val sleepMinutes: Long?,
+    val spo2: Double?,
+)
+
+data class ProbeRow(
+    val type: String,
+    val count: Int,
+    val firstIso: String?,
+    val lastIso: String?,
+    val medianGapSec: Double?,
+    val origins: List<String>,
+)
+
+class HealthRepo(private val context: Context) {
+
+    private val client: HealthConnectClient by lazy { HealthConnectClient.getOrCreate(context) }
+
+    fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
+
+    suspend fun hasAllPermissions(): Boolean =
+        client.permissionController.getGrantedPermissions().containsAll(HealthPerms.all)
+
+    suspend fun today(): TodayStats {
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now()
+        val midnight = ZonedDateTime.now(zone).toLocalDate().atStartOfDay(zone).toInstant()
+        val sleepStart = ZonedDateTime.now(zone).toLocalDate().minusDays(1)
+            .atTime(LocalTime.of(18, 0)).atZone(zone).toInstant()
+        val since48h = now.minus(Duration.ofHours(48))
+
+        val agg = runCatching {
+            client.aggregate(
+                AggregateRequest(
+                    metrics = setOf(
+                        StepsRecord.COUNT_TOTAL,
+                        DistanceRecord.DISTANCE_TOTAL,
+                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
+                        HeartRateRecord.BPM_AVG,
+                        HeartRateRecord.BPM_MIN,
+                        HeartRateRecord.BPM_MAX,
+                    ),
+                    timeRangeFilter = TimeRangeFilter.between(midnight, now),
+                )
+            )
+        }.getOrNull()
+
+        val sleepMin = runCatching {
+            client.aggregate(
+                AggregateRequest(
+                    metrics = setOf(SleepSessionRecord.SLEEP_DURATION_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(sleepStart, now),
+                )
+            )[SleepSessionRecord.SLEEP_DURATION_TOTAL]?.toMinutes()
+        }.getOrNull()
+
+        val resting = latest(RestingHeartRateRecord::class, since48h, now)?.beatsPerMinute
+        val hrv = latest(HeartRateVariabilityRmssdRecord::class, since48h, now)?.heartRateVariabilityMillis
+        val spo2 = latest(OxygenSaturationRecord::class, since48h, now)?.percentage?.value
+
+        return TodayStats(
+            steps = agg?.get(StepsRecord.COUNT_TOTAL) ?: 0L,
+            distanceM = agg?.get(DistanceRecord.DISTANCE_TOTAL)?.inMeters ?: 0.0,
+            activeKcal = agg?.get(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
+            hrAvg = agg?.get(HeartRateRecord.BPM_AVG),
+            hrMin = agg?.get(HeartRateRecord.BPM_MIN),
+            hrMax = agg?.get(HeartRateRecord.BPM_MAX),
+            restingHr = resting,
+            hrvMs = hrv,
+            sleepMinutes = sleepMin,
+            spo2 = spo2,
+        )
+    }
+
+    private suspend fun <T : Record> latest(type: KClass<T>, from: Instant, to: Instant): T? = runCatching {
+        client.readRecords(
+            ReadRecordsRequest(
+                recordType = type,
+                timeRangeFilter = TimeRangeFilter.between(from, to),
+                ascendingOrder = false,
+                pageSize = 1,
+            )
+        ).records.firstOrNull()
+    }.getOrNull()
+
+    /** Streams all pages of [type]; [onRecord] is invoked per record. */
+    private suspend fun <T : Record> stream(
+        type: KClass<T>,
+        from: Instant,
+        to: Instant,
+        onRecord: (T) -> Unit,
+    ) {
+        var token: String? = null
+        do {
+            val resp = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = type,
+                    timeRangeFilter = TimeRangeFilter.between(from, to),
+                    pageSize = 1000,
+                    pageToken = token,
+                )
+            )
+            resp.records.forEach(onRecord)
+            token = resp.pageToken.takeIf { it.isNotEmpty() }
+        } while (token != null)
+    }
+
+    private class Acc {
+        var count = 0
+        var first: Instant? = null
+        var last: Instant? = null
+        var prev: Instant? = null
+        val origins = sortedSetOf<String>()
+        val hist = HashMap<Long, Int>()
+        var histN = 0L
+
+        fun addTime(t: Instant) {
+            if (first == null || t < first) first = t
+            if (last == null || t > last) last = t
+            prev?.let {
+                val g = Math.round((t.toEpochMilli() - it.toEpochMilli()) / 1000.0)
+                if (g >= 0) { hist.merge(g, 1, Int::plus); histN++ }
+            }
+            prev = t
+        }
+
+        fun median(): Double? {
+            if (histN == 0L) return null
+            val target = (histN + 1) / 2
+            var run = 0L
+            for (k in hist.keys.sorted()) {
+                run += hist[k]!!
+                if (run >= target) return k.toDouble()
+            }
+            return null
+        }
+    }
+
+    private suspend fun <T : Record> probeType(
+        name: String,
+        type: KClass<T>,
+        from: Instant,
+        to: Instant,
+        startOf: (T) -> Instant,
+    ): ProbeRow = try {
+        val a = Acc()
+        stream(type, from, to) { r ->
+            a.count++
+            a.origins.add(r.metadata.dataOrigin.packageName)
+            a.addTime(startOf(r))
+        }
+        ProbeRow(name, a.count, a.first?.toString(), a.last?.toString(), a.median(), a.origins.toList())
+    } catch (e: Throwable) {
+        ProbeRow("$name [ERR: ${e.message ?: e.javaClass.simpleName}]", 0, null, null, null, emptyList())
+    }
+
+    suspend fun probe(days: Int = 30): List<ProbeRow> {
+        val to = Instant.now()
+        val from = to.minus(Duration.ofDays(days.toLong()))
+        val rows = mutableListOf<ProbeRow>()
+
+        rows += probeType("Steps", StepsRecord::class, from, to) { it.startTime }
+        rows += probeType("Distance", DistanceRecord::class, from, to) { it.startTime }
+
+        // HeartRate: flatten samples; gaps computed over all samples in time order.
+        var samples = 0L
+        rows += try {
+            val a = Acc()
+            val s = Acc()
+            stream(HeartRateRecord::class, from, to) { r ->
+                a.count++
+                a.origins.add(r.metadata.dataOrigin.packageName)
+                a.addTime(r.startTime)
+                for (smp in r.samples) { s.addTime(smp.time); samples++ }
+            }
+            ProbeRow("HeartRate", a.count, a.first?.toString(), a.last?.toString(), s.median(), a.origins.toList())
+        } catch (e: Throwable) {
+            ProbeRow("HeartRate [ERR: ${e.message ?: e.javaClass.simpleName}]", 0, null, null, null, emptyList())
+        }
+        rows += ProbeRow("HeartRate samples", samples.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), null, null, null, emptyList())
+
+        rows += probeType("RestingHeartRate", RestingHeartRateRecord::class, from, to) { it.time }
+        rows += probeType("HeartRateVariabilityRmssd", HeartRateVariabilityRmssdRecord::class, from, to) { it.time }
+        rows += probeType("SleepSession", SleepSessionRecord::class, from, to) { it.startTime }
+        rows += probeType("OxygenSaturation", OxygenSaturationRecord::class, from, to) { it.time }
+        rows += probeType("ExerciseSession", ExerciseSessionRecord::class, from, to) { it.startTime }
+        rows += probeType("ActiveCaloriesBurned", ActiveCaloriesBurnedRecord::class, from, to) { it.startTime }
+        rows += probeType("TotalCaloriesBurned", TotalCaloriesBurnedRecord::class, from, to) { it.startTime }
+        rows += probeType("RespiratoryRate", RespiratoryRateRecord::class, from, to) { it.time }
+        rows += probeType("Vo2Max", Vo2MaxRecord::class, from, to) { it.time }
+        return rows
+    }
+
+    suspend fun logSession(startMs: Long, endMs: Long, title: String, notes: String?, kcal: Double?) {
+        val start = Instant.ofEpochMilli(startMs)
+        val end = Instant.ofEpochMilli(endMs)
+        val offset = ZoneId.systemDefault().rules.getOffset(start)
+        val records = mutableListOf<Record>()
+        records += ExerciseSessionRecord(
+            startTime = start,
+            startZoneOffset = offset,
+            endTime = end,
+            endZoneOffset = ZoneId.systemDefault().rules.getOffset(end),
+            metadata = Metadata.manualEntry(),
+            exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_PICKLEBALL,
+            title = title,
+            notes = notes,
+        )
+        if (kcal != null && kcal > 0.0) {
+            records += TotalCaloriesBurnedRecord(
+                startTime = start,
+                startZoneOffset = offset,
+                endTime = end,
+                endZoneOffset = ZoneId.systemDefault().rules.getOffset(end),
+                energy = Energy.kilocalories(kcal),
+                metadata = Metadata.manualEntry(),
+            )
+        }
+        client.insertRecords(records)
+    }
+}
