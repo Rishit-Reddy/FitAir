@@ -76,7 +76,7 @@ class MetricStatsTest {
         assertEquals(58f, b.lo[0], 0f); assertEquals(90f, b.hi[0], 0f)
         assertTrue(b.mean[1].isNaN())
         assertEquals(100f, b.mean[2], 1e-4f)
-        assertEquals(285, b.mean.count { it.isNaN() })
+        assertEquals(286, b.mean.count { it.isNaN() }) // 288 bins, only bins 0 and 2 are filled
     }
 
     @Test fun downsampleIgnoresRowsOutsideTheDay() {

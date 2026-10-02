@@ -110,8 +110,10 @@ object TodayBriefLogic {
             if (t.length > MAX_CHARS) return "bullet longer than $MAX_CHARS characters"
             if (t.contains('!')) return "exclamation mark"
             if (FORBIDDEN.any { it.containsMatchIn(t) }) return "forbidden word"
-            if (DaySummaryLogic.BANNED.containsMatchIn(t)) return "medical word"
-            if (ILLNESS.containsMatchIn(t) && !t.contains("maybe", ignoreCase = true)) return "medical word"
+            // "illness" is allowed only when hedged with "maybe"; every other medical word is always rejected
+            val illnessOk = ILLNESS.containsMatchIn(t) && t.contains("maybe", ignoreCase = true)
+            if (DaySummaryLogic.BANNED.containsMatchIn(if (illnessOk) ILLNESS.replace(t, " ") else t)) return "medical word"
+            if (ILLNESS.containsMatchIn(t) && !illnessOk) return "medical word"
             var rest = t
             for (m in CLOCK.findAll(t)) {
                 val c = "%02d:%s".format(m.groupValues[1].toInt(), m.groupValues[2])

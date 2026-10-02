@@ -469,3 +469,9 @@ Build only if Open question 7 is "yes". `TodoistTaskSource` (API v1, token in Se
 - [R18] Gemini pricing and per-tier data use — https://ai.google.dev/gemini-api/docs/pricing
 - [R19] Gemini implicit caching (prefix, minimum tokens) — https://ai.google.dev/gemini-api/docs/caching
 - [R20] Gemini API additional terms (unpaid vs paid data use, human review) — https://ai.google.dev/gemini-api/terms
+
+
+## Update v0.9.0 (docs/PLAN_090_METRICS_TODAY.md)
+Tabs are now Today · Metrics · Calendar · Coach · Log (Settings behind the gear on Today). Today is one big card (2 large + 3 small
+sub-cards chosen by mode) with 3 AI-summary bullets (`coach/TodayBrief*`, cached in `day_brief`, schema v5), then slim Next up and Water
+strips. The Metrics tab is a card grid (`ui/metrics/*`, shared `MetricCard`) whose cards open detail screens; layout is stored via `PrefDao`.

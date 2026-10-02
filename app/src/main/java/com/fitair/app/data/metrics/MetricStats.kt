@@ -10,7 +10,7 @@ object MetricStats {
     const val MIN_BAND_DAYS = 14
     const val BAND_WINDOW = 28
     /** Smallest spread used when judging a reading, so a very steady history does not turn 1 bpm into "high". */
-    const val MIN_SD_RHR = 1.0
+    const val MIN_SD_RHR = 1.5
     const val MIN_SD_HRV = 2.0
     const val BINS = 288
     const val BIN_MS = 300_000L
