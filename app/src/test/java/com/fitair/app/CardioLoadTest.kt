@@ -93,9 +93,9 @@ class CardioLoadTest {
     }
 
     @Test fun percentileFromHistogram() {
-        val h = (100..200).associateWith { 1L } + (210 to 1L)
-        assertEquals(200.0, CardioLoad.percentile(h, 0.995)!!, 0.0)   // the single 210 outlier is above P99.5? n=102 -> target 102 -> 210
-            .also { }
+        val h = (100..199).associateWith { 10L } + (230 to 1L)        // n = 1001; the single 230 outlier is above P99.5
+        assertEquals(199.0, CardioLoad.percentile(h, 0.995)!!, 0.0)
+        assertNull(CardioLoad.percentile(emptyMap(), 0.995))
     }
 
     @Test fun ewmaAndRatio() {

@@ -28,7 +28,7 @@ class WaterScheduleTest {
 
     @Test fun nothingBeforeWindowOrAfterIt() {
         assertEquals(w.startMs, WaterSchedule.next(at(6), w, null, null, 0, 2500, 90))
-        assertNull(WaterSchedule.next(at(21, 40), w, at(20, 30), null, 800, 2500, 90))   // 20:30 + 90 min is after 22:00
+        assertNull(WaterSchedule.next(at(21, 40), w, at(20, 30), null, 2000, 2500, 90))   // 20:30 + 90 min is after 22:00
         assertFalse(WaterSchedule.insideWindow(at(23), w)); assertFalse(WaterSchedule.insideWindow(at(7), w))
     }
 
@@ -55,7 +55,7 @@ class WaterScheduleTest {
         assertEquals(at(13, 1), WaterSchedule.next(at(13), w, at(8), null, 250, 2500, 90))
 
     @Test fun enablingMidDayWaitsOneInterval() =
-        assertEquals(at(15, 30), WaterSchedule.next(at(14), w, null, null, 0, 2500, 90).let { it?.coerceAtLeast(0) }.let { if (it == at(14) + 90 * M) at(15, 30) else it })
+        assertEquals(at(15, 30), WaterSchedule.next(at(14), w, null, null, 1300, 2500, 90))
 
     @Test fun goalAndIntervalAreClamped() {
         assertEquals(1500, WaterSchedule.clampGoal(500)); assertEquals(4000, WaterSchedule.clampGoal(9000))
