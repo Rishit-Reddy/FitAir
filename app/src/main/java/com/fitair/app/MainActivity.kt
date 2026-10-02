@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,7 +20,10 @@ import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("fitair", Context.MODE_PRIVATE)
@@ -48,6 +52,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
     var testResult by mutableStateOf<String?>(null); private set
     var testing by mutableStateOf(false); private set
+
+    // ---- coach chat ----
+    private val coachRepo = CoachRepo(app)
+    var chat by mutableStateOf(ChatStore.load(app)); private set
+    var thinking by mutableStateOf(false); private set
+    var chatError by mutableStateOf<String?>(null); private set
+
+    private fun updateChat(m: List<ChatMsg>) { chat = m; ChatStore.save(getApplication(), m) }
+
+    fun sendChat(text: String) {
+        if (thinking) return
+        AppLog.d("coach: send (${text.length} chars)")
+        updateChat(chat + ChatMsg("user", text))
+        runAsk()
+    }
+
+    fun retryChat() {
+        if (thinking || chat.lastOrNull()?.role != "user") {
+            // drop trailing notes so the last item is the user message
+            val trimmed = chat.dropLastWhile { it.role == "note" }
+            if (trimmed.lastOrNull()?.role != "user") return
+            updateChat(trimmed)
+        }
+        AppLog.d("coach: retry")
+        runAsk()
+    }
+
+    private fun runAsk() {
+        viewModelScope.launch {
+            thinking = true; chatError = null
+            try {
+                val history = chat.filter { it.role != "note" }
+                val reply = coachRepo.ask(history) { note ->
+                    viewModelScope.launch(Dispatchers.Main) { updateChat(chat + ChatMsg("note", note)) }
+                }
+                updateChat(chat + ChatMsg("assistant", reply))
+            } catch (e: IOException) {
+                AppLog.d("coach error: ${e.message}")
+                chatError = e.message ?: "Request failed"
+            } catch (e: Exception) {
+                AppLog.d("coach error: $e")
+                chatError = e.message ?: e.toString()
+            }
+            thinking = false
+        }
+    }
+
+    fun clearChat() { AppLog.d("coach: chat cleared"); ChatStore.clear(getApplication()); chat = emptyList(); chatError = null }
+
+    // ---- readiness ----
+    var readinessScore by mutableStateOf<String?>(null); private set
+    var readinessNote by mutableStateOf<String?>(null); private set
+    var readinessOffline by mutableStateOf(false); private set
+
+    fun loadReadiness() {
+        viewModelScope.launch {
+            try {
+                val j = withContext(Dispatchers.IO) {
+                    ServerApi.get(getApplication(), "/readiness?date=${java.time.LocalDate.now()}")
+                }
+                val sc = j.opt("score")
+                readinessScore = if (sc is Number) Math.round(sc.toDouble()).toString() else null
+                val notes = j.optJSONArray("notes")
+                readinessNote = notes?.optString(0)?.takeIf { it.isNotBlank() }
+                readinessOffline = false
+            } catch (e: Exception) {
+                AppLog.d("readiness failed: ${e.message}")
+                readinessScore = null; readinessNote = null; readinessOffline = true
+            }
+        }
+    }
 
     init {
         SyncScheduler.schedulePeriodic(app)
@@ -159,9 +234,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MainContent(vm: MainViewModel) {
-    val tabs = listOf("Today", "Log", "Data", "Settings")
+    val tabs = listOf("Today", "Coach", "Log", "Data", "Settings")
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
+        modifier = Modifier.imePadding(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
@@ -183,8 +259,9 @@ private fun MainContent(vm: MainViewModel) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 0 -> TodayScreen(vm)
-                1 -> LogScreen(vm)
-                2 -> DataScreen(vm)
+                1 -> CoachScreen(vm)
+                2 -> LogScreen(vm)
+                3 -> DataScreen(vm)
                 else -> SettingsScreen(vm)
             }
         }

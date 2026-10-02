@@ -31,7 +31,7 @@ private fun fmtTimer(ms: Long): String {
 private fun Hairline() = HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
 @Composable
-private fun Caption(text: String) =
+fun Caption(text: String) =
     Text(text.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
@@ -112,11 +112,23 @@ fun LoadingScreen() {
 @Composable
 fun TodayScreen(vm: MainViewModel) {
     val s = vm.stats
+    LaunchedEffect(Unit) { vm.loadReadiness() }
     Page {
+        Caption("Readiness")
+        if (vm.readinessOffline) {
+            Text("Laptop offline", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 24.dp))
+        } else {
+            Text(vm.readinessScore ?: DASH, style = MaterialTheme.typography.displayLarge, modifier = Modifier.padding(top = 4.dp))
+            Text(vm.readinessNote ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 24.dp))
+        }
+        Hairline()
+        Spacer(Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Caption("Steps today")
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { vm.refresh() }, enabled = !vm.loading) {
+            TextButton(onClick = { vm.refresh(); vm.loadReadiness() }, enabled = !vm.loading) {
                 Text(if (vm.loading) "Refreshing" else "Refresh")
             }
         }
@@ -281,8 +293,17 @@ fun SettingsScreen(vm: MainViewModel) {
         Spacer(Modifier.height(24.dp))
         Caption("Coach")
         Spacer(Modifier.height(8.dp))
-        Text("Coach arrives in the next version", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(20.dp))
+        var provider by remember { mutableStateOf(vm.getPref("coach_provider").ifEmpty { "gemini" }) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("gemini" to "Gemini", "openai" to "OpenAI").forEach { (k, l) ->
+                FilterChip(selected = provider == k, onClick = {
+                    provider = k; vm.setPref("coach_provider", k); AppLog.d("coach provider: $k")
+                }, label = { Text(l) })
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        PrefField(vm, "coach_model_gemini", "Gemini model (default gemini-2.5-flash)", secret = false)
+        PrefField(vm, "coach_model_openai", "OpenAI model (default gpt-4o-mini)", secret = false)
         PrefField(vm, "gemini_key", "Gemini API key", secret = true)
         PrefField(vm, "openai_key", "OpenAI API key", secret = true)
         Spacer(Modifier.height(24.dp))
