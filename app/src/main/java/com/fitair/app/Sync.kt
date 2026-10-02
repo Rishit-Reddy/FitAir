@@ -104,6 +104,7 @@ class SyncRepo(private val context: Context) {
         } catch (e: kotlinx.coroutines.CancellationException) { throw e
         } catch (e: Throwable) { AppLog.e("post-sync migration failed (ignored)", e) }
         try { com.fitair.app.notify.WaterAlarm.reschedule(context) } catch (e: Throwable) { AppLog.d("water reschedule failed: ${e.message}") }
+        com.fitair.app.notify.WakeNotice.afterSync(context)
         AppLog.d("sync finished OK in ${System.currentTimeMillis() - t0} ms, wrote ${written.values.sum()} rows")
         written
     }

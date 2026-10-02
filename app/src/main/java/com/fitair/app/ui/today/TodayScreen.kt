@@ -42,6 +42,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fitair.app.core.Format
 import com.fitair.app.integrations.calendar.CalEvent
 import com.fitair.app.ui.agenda.AgendaFormat
+import com.fitair.app.ui.agenda.AllDayLine
+import com.fitair.app.ui.copy.CopyMorning
 import com.fitair.app.ui.agenda.AgendaList
 import com.fitair.app.ui.agenda.AgendaLive
 import com.fitair.app.ui.agenda.AgendaVm
@@ -78,8 +80,8 @@ fun destFor(id: MetricId): TodayDest? = when (id) {
 private val WIDE = 600.dp
 
 /**
- * Today: header (date, "data to 14:05", gear), one big card with two large and three small metric cards chosen by [todayLayout]
- * and exactly three summary bullets, then the slim Next up and Water strips. The mode is recomputed on open, on pull-to-refresh and
+ * Today: header (date, "data to 14:05", gear), then the morning recap (until "Seen?") or five metric cards chosen by [todayLayout],
+ * then Next up, today's agenda and Water. The AI summary is hidden for now (0.9.2). The mode is recomputed on open, on pull-to-refresh and
  * after a sync-on-open that finishes within 30 s, never while the screen is being touched.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,7 +92,7 @@ fun TodayScreen(
     val ui = vm.ui
     val mode = vm.mode
     var sheet by remember { mutableStateOf(false) }
-    var details by remember { mutableStateOf(false) }
+    var confirmSeen by remember { mutableStateOf(false) }
     var syncInfo by remember { mutableStateOf(false) }
     val agenda: AgendaVm = viewModel()
     val requestCalendar = rememberCalendarPermissionRequest { agenda.refresh() }
@@ -99,7 +101,6 @@ fun TodayScreen(
     // tick once a minute so "in 40 min" and the freshness text stay true
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); now = System.currentTimeMillis() } }
-    LaunchedEffect(mode, ui?.date, ui?.lastSyncMs, ui?.dataToMs) { vm.ensureBrief() }
     val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) vm.enableWaterReminders() }
 
     if (syncInfo) {
@@ -168,16 +169,25 @@ fun TodayScreen(
                 val bed = (ui.wake?.usualBedMin ?: 23 * 60).let { if (it < 12 * 60) it + 24 * 60 else it }
                 !(mode == Mode.Evening && (nowMin >= bed - 60 || nowMin < 4 * 60))
             }
-            val layout = todayLayout(mode, waterOpen = waterOpen && ui.water != null, alert = ui.insights.any { it.alert })
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            // seen state is read from the DB each time the screen is rebuilt after "Yes"; onOpen() above reloads the screen
+            val seen = remember(ui.date, confirmSeen) { MorningSeen.isSeen(ctx, ui.date) }
+            val recap = mode == Mode.Morning && !seen
+            val cardMode = if (mode == Mode.Morning) Mode.Day else mode
+            val layout = todayLayout(cardMode, waterOpen = waterOpen && ui.water != null, alert = ui.insights.any { it.alert })
             val hero: @Composable () -> Unit = {
-                HeroCard(ui, mode, layout, vm.brief, now,
-                    onCard = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) },
-                    onDetails = { details = true })
+                if (recap) MorningRecap(ui.snapshot, onSleep = { onOpen(TodayDest.Sleep) },
+                    onReadiness = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) }, onSeen = { confirmSeen = true })
+                else TodayCards(ui.snapshot, cardMode, layout, now,
+                    onCard = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) })
             }
-            val strips: @Composable () -> Unit = {
+            val strips: @Composable (Boolean) -> Unit = { withAgenda ->
                 layout.below.forEach { b ->
                     when (b) {
-                        Below.NextUp -> NextUpStripBlock(agenda, mode, now, onOpenCalendar, requestCalendar)
+                        Below.NextUp -> {
+                            NextUpStripBlock(agenda, mode, now, onOpenCalendar, requestCalendar)
+                            if (withAgenda && mode != Mode.Evening) AgendaBlock(agenda, rest = mode != Mode.Morning, onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
+                        }
                         Below.Water -> WaterBlock(ui, mode, vm, onEnableReminders = {
                             if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
                         })
@@ -191,86 +201,26 @@ fun TodayScreen(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
                         Column(Modifier.weight(1f).widthIn(max = 560.dp)) { hero() }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                            strips()
+                            strips(false)
                             AgendaBlock(agenda, rest = true, onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
                         }
                     }
                 } else {
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); strips() }
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); strips(true) }
                 }
             }
         }
     }
     val r = ui?.readiness
     if (sheet && r != null) BreakdownSheet(r, onDismiss = { sheet = false }, onTrend = { sheet = false; onOpen(TodayDest.Readiness) })
-    if (details) DetailsSheet(ui?.facts, onDismiss = { details = false })
-}
-
-@Composable
-private fun HeroCard(
-    ui: TodayUi, mode: Mode, layout: TodayLayout, brief: com.fitair.app.coach.Brief?, nowMs: Long,
-    onCard: (MetricId) -> Unit, onDetails: () -> Unit,
-) {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val border = if (dark) Modifier else Modifier.border(1.dp, androidx.compose.ui.graphics.Color(0xFFE7E7E4), Shapes.hero)
-    val snap = ui.snapshot
-    Column(
-        Modifier.fillMaxWidth().then(border).clip(Shapes.hero).background(MaterialTheme.colorScheme.surfaceContainer).padding(Spacing.heroPad),
-        verticalArrangement = Arrangement.spacedBy(Spacing.subGap),
-    ) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.subGap)) {
-            layout.large.forEach { id ->
-                val m = Modifier.weight(1f).fillMaxHeight()
-                if (snap == null) MetricCardSkeleton(CardSize.Large, m)
-                else MetricCard(MetricCards.card(id, snap, CardSize.Large, mode, nowMs), CardSize.Large, { onCard(id) }, m)
-            }
-        }
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.subGap)) {
-            layout.small.forEach { id ->
-                val m = Modifier.weight(1f).fillMaxHeight()
-                if (snap == null) MetricCardSkeleton(CardSize.Small, m)
-                else MetricCard(MetricCards.card(id, snap, CardSize.Small, mode, nowMs), CardSize.Small, { onCard(id) }, m)
-            }
-        }
-        SummarySection(brief, onDetails)
-    }
-}
-
-/** "Summary" with "Details ›", then exactly three bullets (placeholders of the same height while nothing is there yet). */
-@Composable
-private fun SummarySection(brief: com.fitair.app.coach.Brief?, onDetails: () -> Unit) {
-    val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.s)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Summary", style = Type.metricTitle, color = dim)
-            if (brief?.source == "template") Text("  rules", style = Type.caption, color = dim)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onDetails, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Details ›", style = Type.label) }
-        }
-        val bullets = brief?.bullets?.takeIf { it.size == 3 }
-        repeat(3) { i ->
-            Row(Modifier.fillMaxWidth().padding(bottom = if (i < 2) Spacing.s else Spacing.xs), verticalAlignment = Alignment.Top) {
-                Box(Modifier.padding(top = 8.dp, end = 10.dp).size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant))
-                if (bullets != null) Text(bullets[i], style = Type.bullet, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                else Box(Modifier.weight(1f).padding(vertical = 4.dp).height(14.dp).clip(Shapes.pill).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)))
-            }
-        }
-    }
-}
-
-/** Today's fact grid in a bottom sheet (steps, distance, cardio load, water, heart rate, workouts). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DetailsSheet(facts: com.fitair.app.coach.DayFacts?, onDismiss: () -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        shape = Shapes.sheet, containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
-    ) {
-        Column(Modifier.padding(start = Spacing.gutter, end = Spacing.gutter, bottom = Spacing.xxl)) {
-            Text("Today so far", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(Spacing.s))
-            DayFactsGrid(facts)
-        }
+    if (confirmSeen && ui != null) {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        AlertDialog(
+            onDismissRequest = { confirmSeen = false },
+            title = { Text(CopyMorning.CONFIRM_TITLE) }, text = { Text(CopyMorning.CONFIRM_BODY) },
+            confirmButton = { TextButton(onClick = { MorningSeen.mark(ctx, ui.date); vm.onOpen(); confirmSeen = false }) { Text(CopyMorning.YES) } },
+            dismissButton = { TextButton(onClick = { confirmSeen = false }) { Text(CopyMorning.NOT_YET) } },
+        )
     }
 }
 
@@ -279,6 +229,10 @@ private fun DetailsSheet(facts: com.fitair.app.coach.DayFacts?, onDismiss: () ->
 private fun NextUpStripBlock(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         NextUpStripOnly(agenda, mode, nowMs, onOpenCalendar, onRequest)
+        if (agenda.active && agenda.loaded) AllDayLine.today(agenda.todayItems)?.let {
+            Text(it, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(start = Spacing.l, top = Spacing.s))
+        }
         if (agenda.active && agenda.loaded && mode != Mode.Morning) {
             val z = remember { ZoneId.systemDefault() }
             val s = agenda.shiftToday(nowMs)

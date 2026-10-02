@@ -80,6 +80,8 @@ private fun GeneralTab(vm: MainViewModel) = Page {
     SectionBreak()
     WaterSection()
     SectionBreak()
+    WakeNoticeSection()
+    SectionBreak()
     HeartRateSection()
     SectionBreak()
     SectionHeader("Google Drive")

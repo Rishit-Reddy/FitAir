@@ -220,7 +220,7 @@ private fun ComponentCardView(c: ComponentCard, modifier: Modifier) {
 
 /** "Good night" first (with its tier dot), the score as a dim number after it. */
 @Composable
-private fun VerdictScore(score: Double?) {
+internal fun VerdictScore(score: Double?) {
     val v = Copy.sleepNight(score)
     if (v.headline.isEmpty()) return
     StatusDot(toneColor(v.tone)); Spacer(Modifier.width(Spacing.s))

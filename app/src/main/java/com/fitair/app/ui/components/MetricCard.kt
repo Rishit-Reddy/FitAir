@@ -77,14 +77,15 @@ private fun ValueText(value: String?, unit: String?, valueStyle: androidx.compos
  * The whole card is one click target with a full-sentence description; charts are silent.
  */
 @Composable
-fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier, onPage: Boolean = false) {
     val dark = isDarkTheme()
-    val surface = if (size == CardSize.Grid) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val raised = size == CardSize.Grid || onPage
+    val surface = if (raised) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     val stale = data.state == CardState.Stale
     val empty = data.state == CardState.Empty
     val minH = when (size) { CardSize.Large -> 172.dp; CardSize.Small -> 112.dp; CardSize.Grid -> 188.dp }
-    val border = if (size == CardSize.Grid && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
+    val border = if (raised && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
     val accent = if (stale || empty) null else MetricAccent.of(data.id, dark)
     androidx.compose.runtime.CompositionLocalProvider(com.fitair.app.ui.components.charts.LocalChartAccent provides accent) {
     Column(
@@ -140,8 +141,8 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
 
 /** Loading shell at the final size: a 7 %-ink block where the value and the chart go (no shimmer). */
 @Composable
-fun MetricCardSkeleton(size: CardSize, modifier: Modifier = Modifier) {
-    val surface = if (size == CardSize.Grid) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+fun MetricCardSkeleton(size: CardSize, modifier: Modifier = Modifier, onPage: Boolean = false) {
+    val surface = if (size == CardSize.Grid || onPage) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
     val block = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
     val minH = when (size) { CardSize.Large -> 172.dp; CardSize.Small -> 112.dp; CardSize.Grid -> 188.dp }
     Column(modifier.clip(Shapes.tile).background(surface).heightIn(min = minH).padding(Spacing.tilePad).clearAndSetSemantics { }) {

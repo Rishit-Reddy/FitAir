@@ -70,13 +70,15 @@ object AgendaFormat {
     /** "14:30–15:15 · in 40 min · location". */
     fun nextUpLine(n: NextUp, z: ZoneId): String = listOfNotNull(range(n.e.begin, n.e.end, z), inText(n.minutes, n.running), if (n.e.work) "shift" else null, n.e.location).joinToString(" \u00B7 ")
 
-    /** First non-all-day event of a day, e.g. "Tomorrow 08:00 Shift start"; null if none. */
+    /** First timed event of a day (or the all-day ones when there is none), e.g. "Tomorrow 08:00 Shift start"; null if none. */
     fun tomorrowLine(events: List<CalEvent>, z: ZoneId): String? =
         events.filter { !it.allDay }.minByOrNull { it.begin }?.let { "Tomorrow ${clock(it.begin, z)} ${it.title}" }
+            ?: AllDayLine.tomorrow(events)
 
     /** "First event 08:00" for the Tomorrow block. */
     fun firstEventLine(events: List<CalEvent>, z: ZoneId): String? =
         events.filter { !it.allDay }.minByOrNull { it.begin }?.let { "First event ${clock(it.begin, z)}" }
+            ?: AllDayLine.tomorrow(events)
 
     /** Default start for a new event: the next half hour when [day] is today, else 09:00. */
     fun insertStart(day: LocalDate, now: LocalDateTime): LocalDateTime {
