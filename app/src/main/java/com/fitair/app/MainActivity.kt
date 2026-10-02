@@ -52,6 +52,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
     var dbSizeBytes by mutableStateOf(0L); private set
 
+    // ---- google drive ----
+    var driveConnected by mutableStateOf(prefs.getBoolean(DrivePrefs.CONNECTED, false)); private set
+    var driveStatus by mutableStateOf<String?>(null); private set
+    var driveLastMs by mutableStateOf(0L); private set
+    var driveFiles by mutableStateOf(0); private set
+    var driveUploads by mutableStateOf(0); private set
+    var driveError by mutableStateOf<String?>(null); private set
+    var driveBusy by mutableStateOf(false); private set
+
+    private fun loadDrive() {
+        driveConnected = prefs.getBoolean(DrivePrefs.CONNECTED, false)
+        driveStatus = prefs.getString(DrivePrefs.STATUS, null)
+        driveLastMs = prefs.getLong(DrivePrefs.LAST, 0L)
+        driveFiles = prefs.getInt(DrivePrefs.FILES, 0)
+        driveUploads = prefs.getInt(DrivePrefs.UPLOADS, 0)
+        driveError = prefs.getString(DrivePrefs.ERROR, null)
+    }
+    private val driveListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
+        if (k?.startsWith("drive_") == true) loadDrive()
+    }
+
+    /** Starts authorization; [launch] is called if Google needs to show a consent screen. */
+    fun connectDrive(launch: (androidx.activity.result.IntentSenderRequest) -> Unit) {
+        viewModelScope.launch {
+            AppLog.d("drive: connect tapped")
+            when (val a = DriveAuth.authorize(getApplication())) {
+                is DriveAuth.NeedsResolution -> {
+                    AppLog.d("drive: launching consent screen")
+                    launch(androidx.activity.result.IntentSenderRequest.Builder(a.intent).build())
+                }
+                is DriveAuth.Token -> onDriveConnected()
+                is DriveAuth.Failed -> {
+                    AppLog.e("drive: connect failed", a.error)
+                    prefs.edit().putString(DrivePrefs.ERROR, (a.error.message ?: a.error.javaClass.simpleName).take(160)).apply()
+                }
+            }
+        }
+    }
+
+    fun onDriveResult(data: android.content.Intent?) {
+        try {
+            val r = com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(getApplication())
+                .getAuthorizationResultFromIntent(data)
+            if (r.accessToken != null) onDriveConnected() else AppLog.d("drive: consent returned no token")
+        } catch (e: Exception) {
+            AppLog.e("drive: consent cancelled/failed", e)
+        }
+    }
+
+    private fun onDriveConnected() {
+        AppLog.d("drive: connected")
+        prefs.edit().putBoolean(DrivePrefs.CONNECTED, true).putString(DrivePrefs.STATUS, "Drive: exporting").remove(DrivePrefs.ERROR).apply()
+        DriveScheduler.exportNow(getApplication())
+    }
+
+    fun exportDriveNow() { AppLog.d("drive: Export now tapped"); DriveScheduler.exportNow(getApplication()) }
+
     // ---- coach chat ----
     private val coachRepo = CoachRepo(app)
     var chat by mutableStateOf(ChatStore.load(app)); private set
@@ -124,6 +181,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        loadDrive()
+        prefs.registerOnSharedPreferenceChangeListener(driveListener)
+        viewModelScope.launch {
+            DriveScheduler.nowFlow(app).collect { infos -> driveBusy = infos.any { !it.state.isFinished }; loadDrive() }
+        }
         SyncScheduler.schedulePeriodic(app)
         viewModelScope.launch {
             SyncScheduler.nowFlow(app).collect { infos ->
@@ -208,6 +270,9 @@ class MainActivity : ComponentActivity() {
                     val launcher = rememberLauncherForActivityResult(
                         PermissionController.createRequestPermissionResultContract()
                     ) { vm.onPermissionResult() }
+                    val driveLauncher = rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
+                    ) { vm.onDriveResult(it.data) }
                     LaunchedEffect(Unit) { vm.checkStatus() }
 
                     when {
@@ -215,7 +280,7 @@ class MainActivity : ComponentActivity() {
                             HealthConnectMissingScreen(vm.sdkStatus == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED)
                         vm.permsGranted == null -> LoadingScreen()
                         vm.permsGranted == false -> GrantAccessScreen { launcher.launch(HealthPerms.all) }
-                        else -> MainContent(vm)
+                        else -> MainContent(vm) { vm.connectDrive { driveLauncher.launch(it) } }
                     }
                 }
             }
@@ -224,7 +289,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun MainContent(vm: MainViewModel) {
+private fun MainContent(vm: MainViewModel, onConnectDrive: () -> Unit) {
     val tabs = listOf("Today", "Coach", "Log", "Data", "Settings")
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
@@ -253,7 +318,7 @@ private fun MainContent(vm: MainViewModel) {
                 1 -> CoachScreen(vm)
                 2 -> LogScreen(vm)
                 3 -> DataScreen(vm)
-                else -> SettingsScreen(vm)
+                else -> SettingsScreen(vm, onConnectDrive)
             }
         }
     }

@@ -280,7 +280,7 @@ fun DataScreen(vm: MainViewModel) {
 // ---------- Settings ----------
 
 @Composable
-fun SettingsScreen(vm: MainViewModel) {
+fun SettingsScreen(vm: MainViewModel, onConnectDrive: () -> Unit) {
     Page {
         Caption("Theme")
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -328,6 +328,30 @@ fun SettingsScreen(vm: MainViewModel) {
             if (txt != null) Text(txt, style = MaterialTheme.typography.bodySmall, color = dim)
         }
         if (vm.dbSizeBytes > 0) Text("Database: %.1f MB".format(vm.dbSizeBytes / 1048576.0), style = MaterialTheme.typography.bodySmall, color = dim)
+        Spacer(Modifier.height(24.dp))
+        Hairline()
+        Spacer(Modifier.height(24.dp))
+        Caption("Google Drive")
+        Spacer(Modifier.height(8.dp))
+        val ddim = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (vm.driveConnected) {
+                Text("Connected", style = MaterialTheme.typography.bodyMedium, color = ddim)
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = { vm.exportDriveNow() }, enabled = !vm.driveBusy) {
+                    Text(if (vm.driveBusy) "Exporting…" else "Export now")
+                }
+            } else {
+                TextButton(onClick = onConnectDrive) { Text("Connect Google Drive") }
+            }
+        }
+        val dl = if (vm.driveLastMs > 0)
+            java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                .format(java.util.Date(vm.driveLastMs)) else "never"
+        Text("Last export: $dl", style = MaterialTheme.typography.bodySmall, color = ddim)
+        if (vm.driveLastMs > 0) Text("${vm.driveFiles} files  ·  ${vm.driveUploads} uploaded last run", style = MaterialTheme.typography.bodySmall, color = ddim)
+        vm.driveStatus?.takeIf { it != "ok" }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ddim) }
+        vm.driveError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         Spacer(Modifier.height(24.dp))
         Hairline()
         Spacer(Modifier.height(24.dp))
