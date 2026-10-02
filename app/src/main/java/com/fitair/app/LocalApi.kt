@@ -24,7 +24,10 @@ object LocalApi {
     private const val MIN_BASELINE_DAYS = 7
     private const val DEFAULT_INTENSITY = 0.6
 
-    internal fun maxHr(): Double = System.getenv("FITAIR_MAXHR")?.toDoubleOrNull() ?: 190.0
+    /** HRmax: pref hr_max, else 208 - 0.7 x age, else observed P99.5 + 5, else 190 (see [LoadDao.hrMax]). */
+    internal fun maxHr(ctx: Context): Double = com.fitair.app.data.dao.LoadDao.hrMax(ctx).value
+
+    internal fun maxHr(): Double = appCtx?.let { maxHr(it) } ?: 190.0
 
     fun get(ctx: Context, path: String): JSONObject {
         val t0 = System.currentTimeMillis()
@@ -133,12 +136,15 @@ object LocalApi {
 
     internal class Ex(val start: Long, val end: Long, val type: Int, val title: String, val hrAvg: Double?)
 
-    internal fun exercises(db: SQLiteDatabase, lo: Long, hi: Long): List<Ex> {
+    /** Sessions starting in [lo, hi). Sessions that count as "not real exercise" (exercise_flag) are left out unless [includeFlagged]. */
+    internal fun exercises(db: SQLiteDatabase, lo: Long, hi: Long, includeFlagged: Boolean = false): List<Ex> {
+        val flagSql = if (includeFlagged) "" else
+            " AND NOT EXISTS (SELECT 1 FROM exercise_flag f WHERE f.start_ms=e.start_ms AND f.origin=e.origin AND f.verdict='not_exercise')"
         val rows = db.rows(
             "SELECT e.start_ms, e.end_ms, e.type, e.title, " +
                 "COALESCE((SELECT avg(bpm) FROM heart_rate h WHERE h.t BETWEEN e.start_ms AND e.end_ms), " +
                 "(SELECT sum(mean*n)/sum(n) FROM hr_30s h WHERE h.t30+30000>e.start_ms AND h.t30<=e.end_ms)) " +
-                "FROM exercise e WHERE e.start_ms >= $lo AND e.start_ms < $hi ORDER BY e.start_ms, e.end_ms DESC"
+                "FROM exercise e WHERE e.start_ms >= $lo AND e.start_ms < $hi$flagSql ORDER BY e.start_ms, e.end_ms DESC"
         ) { Ex(it.getLong(0), it.getLong(1), it.getInt(2), it.getString(3) ?: "", if (it.isNull(4)) null else it.getDouble(4)) }
         val out = ArrayList<Ex>()
         var lastEnd = -1L
@@ -402,8 +408,9 @@ object LocalApi {
      * GET /insights?date=YYYY-MM-DD
      *   {"date","computed_ms","insights":[{id,severity:info|watch|alert,title,detail}]}   (empty when baseline < 7 days)
      * GET /load?from&to
-     *   {"days":[{"date","trimp","acute","chronic","acwr"}]}   acute=EWMA 7 d, chronic=EWMA 28 d of daily Banister TRIMP,
-     *   acwr=acute/chronic or null (chronic ~0 or < 14 days of history)
+     *   {"days":[{"date","cardio","minutes_light|moderate|vigorous|peak","coverage","acute","chronic","acwr","exercise_trimp"}]}
+     *   cardio = whole-day heart-rate load; acute=EWMA 7 d, chronic=EWMA 28 d of it; acwr=acute/chronic or null
+     *   (chronic ~0 or < 14 days of history); exercise_trimp = old per-workout TRIMP (information).
      * Missing/recent rows are computed on demand. Fields are null when not computable.
      */
     private fun parseOrNull(s: String?): Any = try {
@@ -444,9 +451,20 @@ object LocalApi {
 
     private fun loadEndpoint(ctx: Context, q: Map<String, String>): JSONObject {
         val arr = JSONArray()
-        for (row in rangeRows(ctx, q)) arr.put(JSONObject().put("date", row.opt("date"))
-            .put("trimp", row.opt("load_trimp") ?: JSONObject.NULL).put("acute", row.opt("acute_load") ?: JSONObject.NULL)
-            .put("chronic", row.opt("chronic_load") ?: JSONObject.NULL).put("acwr", row.opt("acwr") ?: JSONObject.NULL))
+        val rows = rangeRows(ctx, q)
+        val from = date(q, "from"); val to = date(q, "to")
+        val ld = com.fitair.app.data.dao.LoadDao.rows(ctx, from, to).associateBy { it.date }
+        for (row in rows) {
+            val l = ld[row.optString("date")]
+            arr.put(JSONObject().put("date", row.opt("date"))
+                .put("cardio", j(l?.cardio?.let { r(it, 1) }))
+                .put("minutes_light", j(l?.zLight)).put("minutes_moderate", j(l?.zMod))
+                .put("minutes_vigorous", j(l?.zVig)).put("minutes_peak", j(l?.zPeak))
+                .put("coverage", j(l?.coverage?.let { r(it, 2) }))
+                .put("acute", row.opt("acute_load") ?: JSONObject.NULL).put("chronic", row.opt("chronic_load") ?: JSONObject.NULL)
+                .put("acwr", row.opt("acwr") ?: JSONObject.NULL)
+                .put("exercise_trimp", row.opt("load_trimp") ?: JSONObject.NULL))
+        }
         return JSONObject().put("days", arr)
     }
 
@@ -486,7 +504,11 @@ object LocalApi {
     private fun workouts(db: SQLiteDatabase, q: Map<String, String>): JSONObject {
         val from = date(q, "from"); val to = date(q, "to"); val z = zone(q); val mh = maxHr()
         val arr = JSONArray()
-        for (ex in exercises(db, bounds(from, z).first, bounds(to, z).second)) {
+        val withFlagged = q["include_flagged"] == "1" || q["include_flagged"] == "true"
+        for (ex in exercises(db, bounds(from, z).first, bounds(to, z).second, withFlagged)) {
+            val flag = db.rawQuery("SELECT verdict, auto FROM exercise_flag WHERE start_ms=?", arrayOf(ex.start.toString())).use {
+                if (it.moveToFirst()) it.getString(0) + (if (it.getInt(1) == 1) " (auto)" else " (you)") else "none"
+            }
             val ts = ArrayList<Long>(); val bs = ArrayList<Double>()
             db.rawQuery("SELECT t, bpm FROM heart_rate WHERE t BETWEEN ${ex.start} AND ${ex.end + 75000} ORDER BY t", null).use { c ->
                 while (c.moveToNext()) { ts.add(c.getLong(0)); bs.add(c.getDouble(1)) }
@@ -501,7 +523,7 @@ object LocalApi {
                 resolution = if (ts.isEmpty()) "none" else "30s"
             }
             val o = JSONObject().put("start", ex.start).put("end", ex.end).put("type", ex.type).put("title", ex.title)
-                .put("duration_min", j(r((ex.end - ex.start) / 60000.0))).put("resolution", resolution)
+                .put("duration_min", j(r((ex.end - ex.start) / 60000.0))).put("resolution", resolution).put("flag", flag)
             workoutMetrics(ts, bs, ex.start, ex.end, mh, o)
             arr.put(o)
         }

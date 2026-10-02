@@ -17,7 +17,8 @@ import org.json.JSONObject
 import java.time.LocalDate
 
 enum class TrendMetric(val title: String, val unit: String, val higherBetter: Boolean) {
-    Readiness("Readiness", "pts", true), Hrv("HRV", "ms", true), RestingHr("Resting HR", "bpm", false), Load("Training load", "TRIMP", false),
+    /** Names match everywhere (Copy): HRV is the "Recovery signal", load is "Cardio load". */
+    Readiness("Readiness", "out of 100", true), Hrv("Recovery signal", "ms", true), RestingHr("Resting heart rate", "bpm", false), Load("Cardio load", "", false),
 }
 
 class TrendDay(
@@ -71,7 +72,7 @@ class TrendVm(app: Application) : AndroidViewModel(app) {
                 TrendMetric.Load -> num(ld, "trimp") ?: num(row, "load_trimp")
             }
             val drivers = if (metric == TrendMetric.Readiness)
-                ReadinessView.parse(row?.opt("readiness_breakdown")?.toString())?.drivers?.take(2)?.map { it.text } ?: emptyList()
+                ReadinessView.parse(row?.opt("readiness_breakdown")?.toString())?.drivers?.take(2)?.map { com.fitair.app.ui.copy.Copy.driver(it.key, it.score, it.text).headline } ?: emptyList()
             else emptyList()
             TrendDay(d, value, drivers, num(ld, "acute"), num(ld, "chronic"), num(ld, "acwr"))
         }

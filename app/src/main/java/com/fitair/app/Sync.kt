@@ -40,6 +40,7 @@ class SyncRepo(private val context: Context) {
         val defaultDays = if (hist) 365L else 30L
         AppLog.d("sync start: history permission=$hist, default window=$defaultDays d, types=${TYPES.size}")
         val written = LinkedHashMap<String, Int>()
+        val emptyBefore = listOf("sleep", "heart_rate", "steps").all { store.maxT(it) == null }
         try { store.migrateHeartRate() } catch (e: Exception) { AppLog.e("heart-rate migration failed (will resume next sync)", e) }
         for (type in TYPES) {
             val tType = System.currentTimeMillis()
@@ -79,6 +80,11 @@ class SyncRepo(private val context: Context) {
             }
         }
         try { backfillWorkoutHr(now) } catch (e: Exception) { AppLog.e("workout HR backfill failed", e) }
+        // water: import drinks from other apps and flush ours to Health Connect (optional permissions; silently skipped without them)
+        try { com.fitair.app.notify.WaterAlarm.importHealthConnect(context) } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Throwable) { AppLog.d("water import skipped: ${e.javaClass.simpleName}: ${e.message}") }
+        try { com.fitair.app.notify.WaterAlarm.flushHealthConnect(context) } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Throwable) { AppLog.d("water flush skipped: ${e.javaClass.simpleName}: ${e.message}") }
         val tA = System.currentTimeMillis()
         try {
             DailyMetrics.recomputeRecent(context, 14)
@@ -90,6 +96,14 @@ class SyncRepo(private val context: Context) {
             .putLong(SyncPrefs.LAST, System.currentTimeMillis())
             .putString(SyncPrefs.COUNTS, JSONObject(counts as Map<*, *>).toString())
             .apply()
+        // Only now (after the first ingest) may the one-time v3 recompute run; on a fresh database rebuild everything once.
+        try {
+            val gotData = listOf("sleep", "heart_rate", "steps").any { store.maxT(it) != null }
+            if (emptyBefore && gotData) com.fitair.app.data.Rebuild.start(context)
+            else DailyMetrics.migrateIfNeeded(context)
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Throwable) { AppLog.e("post-sync migration failed (ignored)", e) }
+        try { com.fitair.app.notify.WaterAlarm.reschedule(context) } catch (e: Throwable) { AppLog.d("water reschedule failed: ${e.message}") }
         AppLog.d("sync finished OK in ${System.currentTimeMillis() - t0} ms, wrote ${written.values.sum()} rows")
         written
     }

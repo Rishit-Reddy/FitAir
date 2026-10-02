@@ -54,6 +54,7 @@ The coach is for questions the cockpit doesn't answer. It is not the main surfac
 | Streaming coach responses | **Don't build** | With answers of 70 words or less, the latency is dominated by tool rounds, not tokens. |
 | Weekly review (stronger model) | **Build (P7)** | One call per week, on demand, is where a stronger model is worth paying for. |
 | Foldable two-pane layout | **Build later (P8)** | Nice on the Pixel foldable, but polish comes after function. |
+| Plain-language layer, icons, Calendar tab, Today modes, day summary, bigger stage bar (v0.8.1) | **Built in 0.8.1** | See docs/PLAN_081.md 3.3, 3.5-3.7, 7.2, 7.5; wording lives in `ui/copy/Copy.kt`. |
 
 **What will actually improve performance and wellbeing (ranked):**
 1. **A consistent sleep window plus a wind-down anchor.** Sleep regularity predicts health outcomes independently of duration [R13], and the app already computes midpoint variability.
@@ -68,30 +69,26 @@ Everything else is convenience.
 ## 2. Information architecture and UI system
 
 ### 2.1 Screens and navigation
-- Bottom bar with **4 destinations** (user decision, P1): `Today`, `Coach`, `Log`, `Settings`. Text labels only, as today. (Supersedes the earlier "3 tabs plus a gear".)
+- Bottom bar with **4 destinations with icons and labels** (v0.8.1, docs/PLAN_081.md 2): `Today`, `Calendar`, `Coach`, `Log`. Icons are custom vectors in `ui/theme/NavIcons.kt` (outlined, filled when selected; teal when selected). **Settings is behind a gear in Today's header** and opens as a detail screen (`TodayDest.Settings`) with Back. The Calendar tab is the agenda promoted to a tab (week strip, "Next up", day list, "+" that opens Google Calendar's insert intent). The Load screen is `TodayDest.Load`.
 - `Settings` has four plain sub-tabs: **General** (theme, coach keys, Drive backup), **Data** (sync status, data probe), **Logs** (app log) and **Diagnostics** (self-check, debug bundle, recent AI calls).
 - Sheets (ModalBottomSheet), not screens: readiness breakdown, check-in, add task, suggestion detail, plan preferences.
 - Expanded width (600dp or more, the unfolded foldable), from P8: Today on the left (max 480dp) and Coach on the right. Use `BoxWithConstraints`; do not add the adaptive library.
 - Navigation stays a simple `when(tab)` plus sheet state. **Do not add Navigation-Compose**; there aren't enough screens to justify it.
 
-### 2.2 Today: content and order (top to bottom)
-| # | Block | Content | Why in this position |
-|---|---|---|---|
-| 1 | Header | `Fri 2 Oct` on the left, freshness pill ("synced 12 min ago" / "stale 3 h") on the right (Settings is a tab, no gear) | Trust: you see right away whether the numbers are current |
-| 2 | Readiness hero | Large number, band word (Ready / Steady / Recover), **one** driver line ("HRV 38 ms, 1.4 SD below baseline"). Tap opens the breakdown sheet. | The single most important number |
-| 3 | Check-in prompt (P3) | Shows only until done: "How do you feel?" with 4 one-tap scales (sheet). Then it collapses to a tiny line. | Feeds readiness and the plan |
-| 4 | Plan (P4) | Up to 3 SuggestionCards in time order: Train / Cook / Wind down | The "what to do" answer |
-| 5 | Agenda (P2) | Compact timeline of today's remaining events plus "free 14:00-16:30" gaps of 45 min or more. Collapsed to 4 rows, "Show all". | Context for the plan |
-| 6 | To-dos (P5) | Open tasks due today or overdue, with checkbox and quick add. Max 5 shown. | Lightweight; not time-blocked |
-| 6b | Sleep card | Full width: last night's duration, score dot, window with the need glyph, mini stage bar, 7-day debt (only when 60 min or more). Tap opens Sleep. | Sleep is the strongest morning driver of readiness |
-| 7 | Vitals | One row of 3 compact tiles: HRV, Resting HR, Steps, each with a delta vs the 28-day baseline | Detail for the curious |
-| 8 | Insights | Only severity `watch`/`alert`, max 2, one line each | Exceptions only |
+### 2.2 Today: content and order (v0.8.1, three modes)
+Today is a list of blocks chosen by `todayMode(now, WakeInfo)` (`ui/today/TodayMode.kt`, pure; wake rules in PLAN_081 7.1). The mode is recomputed on open, on pull-to-refresh and after a sync-on-open that ends within 30 s of an untouched screen, never while he is touching the screen. `todayBlocks(ui, mode, expanded, agendaLeft)` returns the list (table-driven tests per mode).
+| Mode | When | Blocks, top to bottom |
+|---|---|---|
+| Morning | until wake + 3 h (latest 12:00, at least wake + 1 h); with no sleep synced yet, before 10:00 ("Waiting for your sleep data") | Readiness (full) · Sleep card (or the quiet waiting line) · Vitals (Recovery signal, Resting heart rate) · Agenda · Water · Insights |
+| Day | otherwise | Next up · Water · Rest of today · Readiness (compact, one tap expands) · Load so far (opens Load) · Sleep line (one tap expands) · Insights |
+| Evening | from max(18:00, usual bedtime - 3 h) and before 04:00 | Day summary card (the only place steps appear) · Tomorrow · Water (until bedtime - 1 h, then one line) · Wind-down line · Rest of today (if any) · Insights (load and sleep debt only) |
+Header: date, "data to 14:05" (newest heart-rate bucket) and the gear. No readiness progress bar: "out of 100 · compared with your own normal". Steps are not on Today outside the Day summary card. Every metric sentence comes from `ui/copy/Copy.kt` (verdict first, number second, jargon only behind Details / "What is this?" sheets).
 
 Removed from Today: HR avg/min/max, distance, SpO2 and active energy (they move to the Coach or Diagnostics). The Refresh button is replaced by pull-to-refresh.
 **Single source of truth:** every number on Today comes from the local DB (`daily_metrics` plus queries). Health Connect is read only by `SyncRepo`. Pull-to-refresh runs a sync and then recomputes.
 
 ### 2.3 Component inventory (`ui/components/`)
-`Page` (scroll column with gutter), `SectionHeader` (caption caps), `Hairline`, `FreshnessPill`, `ReadinessHero`, `MetricTile` (value, unit, delta, label), `StatRow`, `SuggestionCard`, `AgendaRow` (time, title, busy/free style), `FreeGapRow`, `TaskRow`, `ScaleChips` (1-5 picker), `CoachAnswerCard`, `ToolTrace` (collapsed "Used: sleep, readiness"), `InlineError` (message plus Retry), `EmptyState`, `BreakdownSheet`.
+`Page` (scroll column with gutter), `SectionHeader` (caption caps), `Hairline`, `FreshnessPill`, `ReadinessHero`, `ReadinessCompact`, `VitalTile` (label, plain verdict, number vs usual), `SleepCard`/`SleepLine`, `StageBar` (28-32 dp, minutes inside segments via `StageLabel.fit`, legend always shown), `NextUpCard`, `LoadCard`, `WaterCard`, `DaySummaryCard`, `ExplainSheet`, `StatRow`, `SuggestionCard`, `AgendaRow` (time, title, busy/free style), `FreeGapRow`, `TaskRow`, `ScaleChips` (1-5 picker), `CoachAnswerCard`, `ToolTrace` (collapsed "Used: sleep, readiness"), `InlineError` (message plus Retry), `EmptyState`, `BreakdownSheet`.
 Rule: screens compose only these components and Material3 primitives. No ad-hoc styling in screens; every colour and size comes from tokens.
 
 ### 2.4 Design tokens (`ui/theme/Tokens.kt`)

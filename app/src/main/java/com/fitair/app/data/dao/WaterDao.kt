@@ -86,10 +86,8 @@ object WaterDao {
     /** Removes the entry logged at [t] by [add] (also the Health Connect record, best-effort, on the next flush). */
     fun undo(ctx: Context, t: Long) {
         val db = LocalStore.get(ctx).db
-        val hc = db.rawQuery("SELECT hc_id FROM water WHERE t=? AND origin=?", arrayOf(t.toString(), ORIGIN))
-            .use { if (it.moveToFirst()) it.getString(0) else null }
         db.execSQL("DELETE FROM water WHERE t=? AND origin=?", arrayOf(t.toString(), ORIGIN))
-        if (hc != null) WaterAlarm.queueHcDelete(ctx, hc)
+        WaterAlarm.queueHcDelete(ctx, t)
         try { WaterAlarm.reschedule(ctx) } catch (e: Exception) { AppLog.d("water: reschedule after undo failed: ${e.message}") }
     }
 

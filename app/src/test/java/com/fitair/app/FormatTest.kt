@@ -25,8 +25,8 @@ class FormatTest {
     }
 
     @Test fun band() {
-        assertEquals("Ready", Format.band(70)); assertEquals("Steady", Format.band(69))
-        assertEquals("Steady", Format.band(50)); assertEquals("Recover", Format.band(49))
+        assertEquals("Well recovered", Format.band(70)); assertEquals("Partly recovered", Format.band(69))
+        assertEquals("Partly recovered", Format.band(50)); assertEquals("Not recovered", Format.band(49))
         assertNull(Format.band(null))
     }
 
@@ -37,8 +37,8 @@ class FormatTest {
         assertEquals("synced 12 min ago", Format.freshness(now, now - 12 * 60_000L).text)
         assertFalse(Format.freshness(now, now - 59 * 60_000L).stale)
         val s = Format.freshness(now, now - 3 * 3_600_000L)
-        assertEquals("stale 3 h", s.text); assertTrue(s.stale)
-        assertEquals("stale 3 d", Format.freshness(now, now - 3 * 86_400_000L).text)
+        assertEquals("updated 3 h ago", s.text); assertTrue(s.stale)
+        assertEquals("updated 3 d ago", Format.freshness(now, now - 3 * 86_400_000L).text)
         assertEquals("synced just now", Format.freshness(now, now + 5_000).text) // clock skew
     }
 
@@ -67,5 +67,11 @@ class FormatTest {
         assertEquals("8,234", Format.compactCount(8234))
         assertEquals("10.2k", Format.compactCount(10234))
         assertEquals("9,999", Format.compactCount(9999))
+    }
+
+    @Test fun stageAndLegendMinutes() {
+        assertEquals("1h 05", Format.stageLong(65)); assertEquals("45m", Format.stageLong(45)); assertEquals("2h 00", Format.stageLong(120))
+        assertEquals("65m", Format.stageShort(65)); assertEquals("6m", Format.stageShort(6))
+        assertEquals("1h 05m", Format.hm(65)); assertEquals("45m", Format.hm(45)); assertEquals("0m", Format.hm(0))
     }
 }

@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fitair.app.core.Format
+import com.fitair.app.ui.copy.Copy
+import androidx.compose.material3.TextButton
 import com.fitair.app.ui.components.*
 import com.fitair.app.ui.components.charts.BarChart
 import com.fitair.app.ui.components.charts.LineChart
@@ -34,6 +36,11 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
     val vm: TrendVm = viewModel(key = "trend-${metric.name}")
     var spanIdx by rememberSaveable { mutableIntStateOf(1) }
     var selected by remember(metric, spanIdx) { mutableStateOf<Int?>(null) }
+    val deltaUnit = if (metric == TrendMetric.Readiness) "" else metric.unit
+    var details by rememberSaveable { mutableStateOf(false) }
+    var explain by remember { mutableStateOf(false) }
+    val explainKey = when (metric) { TrendMetric.Readiness -> "readiness"; TrendMetric.Hrv -> "hrv"; TrendMetric.RestingHr -> "resting_hr"; TrendMetric.Load -> "load" }
+    if (explain) ExplainSheet(explainKey, onDismiss = { explain = false })
     LaunchedEffect(metric, spanIdx) { vm.load(metric, SPANS[spanIdx]) }
 
     Column(Modifier.fillMaxSize()) {
@@ -58,12 +65,23 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
         val tone = TrendMath.tone(metric, shown.value, ui.band)
 
         // today's value, what it means, then the history
-        SectionHeader(
-            when {
-                shown.date == LocalDate.now() -> "Today"
-                else -> "Last reading · ${shown.date.format(DAY_FMT)}"
-            },
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionHeader(
+                when {
+                    shown.date == LocalDate.now() -> "Today"
+                    else -> "Last reading · ${shown.date.format(DAY_FMT)}"
+                },
+                Modifier.weight(1f),
+            )
+            TextButton(onClick = { explain = true }) { Text("What is this?", style = Type.label) }
+        }
+        // the verdict comes first, the number second
+        val verdict = when (metric) {
+            TrendMetric.Readiness -> Copy.readiness(shown.value?.let { Math.round(it).toInt() }).let { v -> v.headline + (v.detail?.let { " \u2014 $it" } ?: "") }
+            TrendMetric.Load -> TrendMath.acwrText(ui.days.lastOrNull { it.acwr != null }?.acwr)
+            else -> Copy.trendVerdict(metric.title, shown.value?.let { v -> ui.band?.let { TrendMath.side(v, it) } }, metric.higherBetter)
+        }
+        Text(verdict, style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(Spacing.s))
         Row(verticalAlignment = Alignment.Bottom) {
             Text(fmt(shown.value, metric), style = MaterialTheme.typography.headlineMedium)
@@ -75,15 +93,10 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
             }
         }
         if (metric != TrendMetric.Load && shown.value != null) {
-            Text(TrendMath.deltaText(shown.value, ui.band, metric.unit), style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(TrendMath.deltaText(shown.value, ui.band, deltaUnit), style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(Spacing.s))
-        if (metric == TrendMetric.Load) {
-            val last = ui.days.lastOrNull { it.acwr != null || it.acute != null }
-            Text(TrendMath.acwrText(last?.acwr), style = Type.body)
-        } else {
-            Text(TrendMath.interpret(metric.title, values, ui.band), style = Type.body)
-        }
+        if (metric != TrendMetric.Load) Text(TrendMath.interpret(metric.title, values, ui.band), style = Type.body)
 
         if (metric == TrendMetric.Readiness) {
             Spacer(Modifier.height(Spacing.l))
@@ -111,7 +124,7 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
                 band = ui.band?.let { it.lo.toFloat() to it.hi.toFloat() }, xLabels = xl, pointColors = pointColors)
             if (ui.band != null) {
                 Spacer(Modifier.height(Spacing.xs))
-                Text("Shaded: your usual range, ${fmt(ui.band.lo, metric)}–${fmt(ui.band.hi, metric)} ${metric.unit} (28-day mean ± 1 SD)",
+                Text("${Copy.BAND_NOTE}, ${fmt(ui.band.lo, metric)}–${fmt(ui.band.hi, metric)} $deltaUnit",
                     style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -131,7 +144,7 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
                     }
                 }
                 if (metric != TrendMetric.Load && day.value != null) {
-                    Text(TrendMath.deltaText(day.value, ui.band, metric.unit), style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(TrendMath.deltaText(day.value, ui.band, deltaUnit), style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (metric == TrendMetric.Readiness) {
                     day.drivers.take(2).forEach { Text(it, style = Type.body) }
@@ -139,12 +152,17 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
             }
         }
 
-        if (metric == TrendMetric.Load) {
-            val last = ui.days.lastOrNull { it.acwr != null || it.acute != null }
-            Spacer(Modifier.height(Spacing.l))
-            StatRow("Acute load (7 days)", last?.acute?.let { Math.round(it).toString() } ?: Format.DASH)
-            StatRow("Chronic load (28 days)", last?.chronic?.let { Math.round(it).toString() } ?: Format.DASH)
-            StatRow("Acute : chronic", last?.acwr?.let { "%.2f".format(Locale.US, it) } ?: Format.DASH)
+        Spacer(Modifier.height(Spacing.s))
+        TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details", style = Type.label) }
+        if (details) {
+            if (metric == TrendMetric.Load) {
+                val last = ui.days.lastOrNull { it.acwr != null || it.acute != null }
+                StatRow("Last 7 days", last?.acute?.let { Math.round(it).toString() } ?: Format.DASH)
+                StatRow("Last 28 days", last?.chronic?.let { Math.round(it).toString() } ?: Format.DASH)
+                StatRow("Ratio", last?.acwr?.let { "%.2f".format(Locale.US, it) } ?: Format.DASH)
+            } else if (ui.band != null) {
+                Text(Copy.BAND_NOTE_DETAIL.trim('(', ')') + ": " + "${fmt(ui.band.lo, metric)}–${fmt(ui.band.hi, metric)} $deltaUnit", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
     }

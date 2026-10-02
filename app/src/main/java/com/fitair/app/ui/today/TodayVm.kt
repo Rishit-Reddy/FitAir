@@ -100,7 +100,7 @@ fun todayBlocks(ui: TodayUi, mode: Mode = Mode.Morning, expanded: Set<TodayBlock
     if (insights.isNotEmpty()) add(TodayBlock.Insights)
 }
 
-class TodayUi(
+data class TodayUi(
     val date: LocalDate,
     val readiness: ReadinessView?,
     val lastSyncMs: Long,
@@ -118,6 +118,7 @@ class TodayUi(
     val restingHr: Int? = null,
     val windDown: WindDown? = null,
     val facts: DayFacts? = null,
+    val glassMl: Int = 250,
 )
 
 /** The drink just logged, for the 10 s "Logged 250 ml · Undo" line. */
@@ -223,8 +224,7 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         val cur = ui ?: return
         val w = withContext(Dispatchers.IO) { WaterDao.today(getApplication()) }
         val f = cur.facts?.let { withContext(Dispatchers.IO) { DaySummary.facts(getApplication(), cur.date) } }
-        ui = TodayUi(cur.date, cur.readiness, cur.lastSyncMs, cur.vitals, cur.night, cur.insights, cur.hasData, cur.wake, w, cur.load,
-            cur.dataToMs, cur.hrNow, cur.restingHr, cur.windDown, f ?: cur.facts)
+        ui = cur.copy(water = w, facts = f ?: cur.facts)
     }
 
     // ---- evening summary -------------------------------------------------------------------------------------
@@ -285,6 +285,7 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
             dataToMs = dataTo, hrNow = hrNow, restingHr = row?.takeIf { it.has("rhr") }?.getDouble("rhr")?.let { Math.round(it).toInt() },
             windDown = windDown(wake.usualWakeMin, need, debt),
             facts = if (evening) DaySummary.facts(ctx, today) else null,
+            glassMl = WaterDao.glassMl(ctx),
         )
     }
 

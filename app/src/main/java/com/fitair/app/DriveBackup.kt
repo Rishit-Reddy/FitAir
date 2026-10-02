@@ -7,6 +7,7 @@ import android.content.Context
 import androidx.core.app.NotificationCompat
 import com.fitair.app.backup.BackupCrypto
 import com.fitair.app.backup.BackupFiles
+import com.fitair.app.backup.BackupGuard
 import com.fitair.app.backup.NeedsPassphraseException
 import com.fitair.app.backup.WrongPassphraseException
 import androidx.work.*
@@ -46,7 +47,14 @@ object DrivePrefs {
     const val FROZEN = "drive_frozen_years"
     /** "<year>:<bytes>,..." of the last upload per year. */
     const val SIZES = "drive_year_sizes"
+    /** True once this device completed a backup or a restore; before that it must not silently replace a remote backup. */
+    const val FIRST_DONE = "drive_first_done"
+
+    fun firstDone(p: android.content.SharedPreferences): Boolean = p.getBoolean(FIRST_DONE, false) || p.getLong(LAST, 0L) > 0L
 }
+
+/** An existing remote backup that this (never-synced) device would replace; shown for confirmation. */
+data class ReplaceInfo(val name: String, val modifiedMs: Long, val sizeBytes: Long)
 
 sealed class DriveAuth {
     data class Token(val token: String) : DriveAuth()
@@ -107,6 +115,11 @@ object DriveBackup {
     val notice: StateFlow<String?> = _notice
     fun clearNotice() { _notice.value = null }
 
+    /** Set when a backup was held back because it would replace an existing remote backup from a device that never backed up/restored. */
+    private val _pendingReplace = MutableStateFlow<ReplaceInfo?>(null)
+    val pendingReplace: StateFlow<ReplaceInfo?> = _pendingReplace
+    fun clearPendingReplace() { _pendingReplace.value = null }
+
     fun markQueued() { if (!isRunning()) _state.value = BackupState(BackupPhase.Preparing, 0) }
     private fun isRunning() = _state.value.phase.let {
         it == BackupPhase.Preparing || it == BackupPhase.Compressing || it == BackupPhase.Uploading ||
@@ -135,7 +148,7 @@ object DriveBackup {
             .associate { it.substringBefore(':') to (it.substringAfter(':').toLongOrNull() ?: 0L) }.toMutableMap()
 
     /** Best-effort; never throws (except coroutine cancellation). */
-    suspend fun run(ctx: Context): Outcome = withContext(Dispatchers.IO) {
+    suspend fun run(ctx: Context, confirmedReplace: Boolean = false): Outcome = withContext(Dispatchers.IO) {
         val prefs = ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE)
         if (!prefs.getBoolean(DrivePrefs.CONNECTED, false)) {
             AppLog.d("backup: not connected, skipping")
@@ -159,8 +172,22 @@ object DriveBackup {
                     set(BackupPhase.Failed, 0); Outcome.Retry
                 }
                 is DriveAuth.Token -> try {
+                    // A device that never backed up or restored must not silently replace a remote backup (its data may be incomplete).
+                    val firstDone = DrivePrefs.firstDone(prefs)
+                    if (!firstDone) {
+                        val remote = listBackups(a.token)
+                        if (BackupGuard.decide(false, remote.isNotEmpty(), confirmedReplace) == BackupGuard.Decision.NeedsConfirm) {
+                            val newest = remote.maxByOrNull { it.modifiedMs }!!
+                            _pendingReplace.value = ReplaceInfo(newest.name, newest.modifiedMs, remote.sumOf { it.size })
+                            AppLog.d("backup: held back, ${remote.size} remote file(s) exist and this device has not backed up or restored yet")
+                            set(BackupPhase.Idle, 0)
+                            return@withContext Outcome.Skipped
+                        }
+                    }
+                    _pendingReplace.value = null
                     val total = backupAll(ctx, prefs, a.token, full)
-                    prefs.edit().putLong(DrivePrefs.LAST, System.currentTimeMillis()).putBoolean(DrivePrefs.FAILED, false).apply()
+                    prefs.edit().putLong(DrivePrefs.LAST, System.currentTimeMillis()).putBoolean(DrivePrefs.FAILED, false)
+                        .putBoolean(DrivePrefs.FIRST_DONE, true).apply()
                     set(BackupPhase.Done, 100)
                     AppLog.d("backup: finished OK in ${System.currentTimeMillis() - t0} ms ($total B uploaded)")
                     Outcome.Ok
@@ -260,7 +287,7 @@ object DriveBackup {
         scope.launch { restore(app, passphrase) }
     }
 
-    private class RemoteFile(val id: String, val name: String, val size: Long)
+    private class RemoteFile(val id: String, val name: String, val size: Long, val modifiedMs: Long = 0L)
 
     private suspend fun restore(ctx: Context, passphrase: String) {
         AppLog.init(ctx)
@@ -275,7 +302,7 @@ object DriveBackup {
             }
             val files = listBackups(token)
             if (files.isEmpty()) { _notice.value = "No FitAir backups found in Google Drive"; set(BackupPhase.Idle, 0); return }
-            var rows = 0L
+            val counts = LinkedHashMap<String, Long>()
             files.forEachIndexed { i, f ->
                 val base = i * 100 / files.size; val span = 100f / files.size
                 val detail = f.name.removePrefix("FitAir-backup").removeSuffix(".zip").trim('-').ifEmpty { "legacy" }
@@ -289,14 +316,18 @@ object DriveBackup {
                 }
                 BackupFiles.extractDb(zip, snap)
                 dl.delete(); dec.delete()
-                rows += BackupFiles.merge(ctx, snap)
+                BackupFiles.merge(ctx, snap).forEach { (t, n) -> counts[t] = (counts[t] ?: 0L) + n }
                 snap.delete()
                 set(BackupPhase.Restoring, base + span.toInt(), detail)
                 AppLog.d("restore: merged ${f.name}")
             }
             set(BackupPhase.Done, 100)
-            _notice.value = "Restored ${files.size} file${if (files.size == 1) "" else "s"} ($rows rows merged)"
-            AppLog.d("restore: done, $rows rows from ${files.size} files")
+            _notice.value = BackupGuard.restoreNotice(files.size, counts)
+            ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE).edit().putBoolean(DrivePrefs.FIRST_DONE, true).apply()
+            _pendingReplace.value = null
+            AppLog.d("restore: done, ${counts.values.sum()} rows from ${files.size} files")
+            // the merge changes history under daily_metrics / load_day: recompute everything in the background
+            com.fitair.app.data.Rebuild.start(ctx)
         } catch (e: CancellationException) { set(BackupPhase.Failed, 0); throw e
         } catch (e: WrongPassphraseException) { _notice.value = "Wrong passphrase"; set(BackupPhase.Failed, 0)
         } catch (e: NeedsPassphraseException) { _notice.value = e.message; set(BackupPhase.Failed, 0)
@@ -316,12 +347,13 @@ object DriveBackup {
         var page: String? = null
         do {
             val q = "trashed=false and mimeType='application/zip'"
-            val url = "$API?q=${enc(q)}&fields=${enc("nextPageToken,files(id,name,size)")}&pageSize=100" + (page?.let { "&pageToken=${enc(it)}" } ?: "")
+            val url = "$API?q=${enc(q)}&fields=${enc("nextPageToken,files(id,name,size,modifiedTime)")}&pageSize=100" + (page?.let { "&pageToken=${enc(it)}" } ?: "")
             val r = JSONObject(ok(http("GET", url, token)).body)
             val a = r.optJSONArray("files")
             if (a != null) for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
-                if (NAME_RE.matches(o.getString("name"))) out.add(RemoteFile(o.getString("id"), o.getString("name"), o.optString("size").toLongOrNull() ?: 0L))
+                if (NAME_RE.matches(o.getString("name"))) out.add(RemoteFile(o.getString("id"), o.getString("name"), o.optString("size").toLongOrNull() ?: 0L,
+                    runCatching { java.time.Instant.parse(o.optString("modifiedTime")).toEpochMilli() }.getOrDefault(0L)))
             }
             page = r.optString("nextPageToken").ifEmpty { null }
         } while (page != null)
@@ -476,7 +508,7 @@ class DriveBackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         AppLog.init(applicationContext)
         AppLog.d("backup: worker started (attempt $runAttemptCount)")
         return try {
-            val out = DriveBackup.run(applicationContext)
+            val out = DriveBackup.run(applicationContext, inputData.getBoolean(DriveScheduler.KEY_CONFIRMED, false))
             if (out == DriveBackup.Outcome.Retry && runAttemptCount < 3 &&
                 inputData.getBoolean(DriveScheduler.KEY_MANUAL, false).not()) Result.retry() else Result.success()
         } catch (e: CancellationException) { throw e
@@ -500,12 +532,13 @@ object DriveScheduler {
     private const val NOW = "fitair-drive-backup-now"
     private const val PERIODIC = "fitair-drive-backup-daily"
     const val KEY_MANUAL = "manual"
+    const val KEY_CONFIRMED = "confirmed_replace"
 
     /** Manual backup: any network, expedited when quota allows. */
-    fun backupNow(ctx: Context) {
+    fun backupNow(ctx: Context, confirmedReplace: Boolean = false) {
         val req = OneTimeWorkRequestBuilder<DriveBackupWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setInputData(workDataOf(KEY_MANUAL to true))
+            .setInputData(workDataOf(KEY_MANUAL to true, KEY_CONFIRMED to confirmedReplace))
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
         WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, req)

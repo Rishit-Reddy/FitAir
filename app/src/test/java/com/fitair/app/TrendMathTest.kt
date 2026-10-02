@@ -22,9 +22,9 @@ class TrendMathTest {
 
     @Test fun deltaText() {
         val b = Band(40.0, 5.0)
-        assertEquals("+3 ms vs your baseline", TrendMath.deltaText(43.2, b, "ms"))
-        assertEquals("−2 bpm vs your baseline", TrendMath.deltaText(38.0, b, "bpm"))
-        assertEquals("in line with your baseline", TrendMath.deltaText(40.3, b, "ms"))
+        assertEquals("+3 ms vs your normal", TrendMath.deltaText(43.2, b, "ms"))
+        assertEquals("−2 bpm vs your normal", TrendMath.deltaText(38.0, b, "bpm"))
+        assertEquals("in line with your normal", TrendMath.deltaText(40.3, b, "ms"))
         assertTrue(TrendMath.deltaText(40.0, null, "ms").contains("not enough"))
     }
 
@@ -39,9 +39,9 @@ class TrendMathTest {
     }
 
     @Test fun acwr() {
-        assertTrue(TrendMath.acwrText(0.6).contains("lighter"))
-        assertTrue(TrendMath.acwrText(1.0).contains("in line"))
-        assertTrue(TrendMath.acwrText(1.5).contains("above"))
+        assertEquals("Lighter week than usual.", TrendMath.acwrText(0.6))
+        assertEquals("Normal week for you.", TrendMath.acwrText(1.0))
+        assertEquals("Harder week than usual.", TrendMath.acwrText(1.5))
         assertTrue(TrendMath.acwrText(null).startsWith("Not enough"))
     }
 

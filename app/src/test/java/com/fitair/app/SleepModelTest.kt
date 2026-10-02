@@ -70,9 +70,9 @@ class SleepModelTest {
         assertEquals(50.0, n.awakeMin!!, 0.0); assertEquals(45.0, n.deepMin!!, 0.0); assertEquals(70.0, n.remMin!!, 0.0)
         assertEquals(0.346, n.deepRemFrac!!, 1e-9); assertEquals(25.0, n.midpointSdMin!!, 0.0); assertEquals(7, n.regNights)
         val c = SleepModel.componentCards(n)
-        assertEquals(listOf("Duration", "Efficiency", "Deep + REM", "Regularity"), c.map { it.name })
+        assertEquals(listOf("Enough sleep", "Restful", "Deep + dream sleep", "Same-time sleep"), c.map { it.name })
         assertEquals(listOf("4h 45m", "85%", "35%", "±25m"), c.map { it.headline })
-        assertEquals("2h 47m under need", c[0].reading)
+        assertEquals("2h 47m less than you need", c[0].reading)
         assertEquals("Awake 50m while in bed", c[1].reading)
         assertEquals("Deep 45m · REM 1h 10m", c[2].reading)
         assertEquals("Timing shift over 7 nights", c[3].reading)
@@ -87,7 +87,7 @@ class SleepModelTest {
         assertEquals("—", c[3].headline); assertNull(c[3].score); assertEquals(Tone.Neutral, c[3].tone)
         assertEquals("Needs 4+ nights this week", c[3].reading); assertEquals("No stage data", c[1].reading)
         val over = Night(LocalDate.parse("2026-10-01"), 484.0, 80.0, 452.0, null, emptyMap(), null)
-        assertEquals("32m over need", SleepModel.componentCards(over)[0].reading)
+        assertEquals("32m more than you need", SleepModel.componentCards(over)[0].reading)
     }
 
     @Test fun durationTonesUseEachNightsNeed() {

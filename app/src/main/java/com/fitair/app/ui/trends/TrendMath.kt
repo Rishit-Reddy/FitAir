@@ -39,11 +39,11 @@ object TrendMath {
         return when { r > 0 -> "+$r$u"; r < 0 -> "−${abs(r)}$u"; else -> "0$u" }
     }
 
-    /** "+3 ms vs your baseline"; "in line with your baseline" when the rounded gap is zero. */
+    /** "+3 ms vs your normal"; "in line with your normal" when the rounded gap is zero. */
     fun deltaText(latest: Double, band: Band?, unit: String): String {
-        if (band == null) return "not enough history for a baseline yet"
+        if (band == null) return "not enough history for your normal yet"
         val r = (latest - band.mean).roundToLong()
-        return if (r == 0L) "in line with your baseline" else "${signed(latest - band.mean, unit)} vs your baseline"
+        return if (r == 0L) "in line with your normal" else "${signed(latest - band.mean, unit)} vs your normal"
     }
 
     /** Side of the band: -1 below, 0 inside, +1 above. */
@@ -97,11 +97,6 @@ object TrendMath {
         }
     }
 
-    /** Acute:chronic load ratio in words. */
-    fun acwrText(acwr: Double?): String = when {
-        acwr == null -> "Not enough training history for a load ratio yet."
-        acwr < 0.8 -> "Recent load is lighter than your 4-week norm (ratio ${"%.2f".format(java.util.Locale.US, acwr)})."
-        acwr <= 1.3 -> "Recent load is in line with your 4-week norm (ratio ${"%.2f".format(java.util.Locale.US, acwr)})."
-        else -> "Recent load is well above your 4-week norm (ratio ${"%.2f".format(java.util.Locale.US, acwr)})."
-    }
+    /** Acute:chronic load ratio in words, from the Copy week verdicts (the ratio itself stays in Details). */
+    fun acwrText(acwr: Double?): String = com.fitair.app.ui.copy.Copy.load(acwr).headline + "."
 }

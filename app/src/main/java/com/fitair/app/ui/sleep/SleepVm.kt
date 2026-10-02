@@ -57,7 +57,8 @@ class NightDetail(val bedtime: String?, val wake: String?, val stages: StageMinu
 
 /** Pure helpers (JVM-testable). */
 object SleepModel {
-    val COMPONENTS = listOf("duration" to "Duration", "efficiency" to "Efficiency", "restorative" to "Deep + REM", "consistency" to "Regularity")
+    /** Display names come from Copy so the same metric has the same name everywhere. */
+    val COMPONENTS = com.fitair.app.ui.copy.Copy.SLEEP_COMPONENTS
 
     private fun JSONObject.num(k: String): Double? =
         if (!has(k) || isNull(k)) null else optDouble(k, Double.NaN).takeIf { !it.isNaN() }
@@ -116,19 +117,14 @@ object SleepModel {
         val m = Math.round(min); return if (m < 60) "${m}m" else "${m / 60}h %02dm".format(m % 60)
     }
 
-    /** The four component cards in fixed order Duration, Efficiency, Deep + REM, Regularity. */
+    /** The four component cards in fixed order: Enough sleep, Restful, Deep + dream sleep, Same-time sleep. */
     fun componentCards(n: Night): List<ComponentCard> {
         val dash = Format.DASH
         fun name(k: String) = COMPONENTS.first { it.first == k }.second
         val asleep = n.sleepMin; val need = n.needMin
         val dur = if (asleep == null) ComponentCard("duration", name("duration"), dash, "No sleep recorded", n.components["duration"], Tone.Neutral) else {
             val diff = Math.round(asleep - (need ?: asleep))
-            val reading = when {
-                need == null -> "Need not known yet"
-                Math.abs(diff) <= 15 -> "Met your need"
-                diff < 0 -> "${Format.duration(-diff)} under need"
-                else -> "${short(diff.toDouble())} over need"
-            }
+            val reading = if (need == null) "Need not known yet" else com.fitair.app.ui.copy.Copy.needDiff(diff) ?: ""
             ComponentCard("duration", name("duration"), Format.duration(Math.round(asleep)), reading, n.components["duration"], Tiers.duration(asleep, need))
         }
         val eff = n.efficiency

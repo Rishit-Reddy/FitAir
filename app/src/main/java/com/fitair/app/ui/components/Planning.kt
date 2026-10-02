@@ -39,7 +39,7 @@ fun SuggestionCard(title: String, reason: String, onAccept: () -> Unit, onDismis
 fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modifier = Modifier, dot: Color? = null) {
     val c = if (busy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(time, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(96.dp))
+        Text(time, style = Type.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(104.dp))
         if (dot != null) { StatusDot(dot); Spacer(Modifier.width(Spacing.s)) }
         Text(title, style = Type.body, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -50,7 +50,7 @@ fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modif
 fun FreeGapRow(range: String, modifier: Modifier = Modifier) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(range, style = Type.bodySmall, color = dim, modifier = Modifier.width(96.dp))
+        Text(range, style = Type.bodySmall, color = dim, modifier = Modifier.width(104.dp))
         Text("free", style = Type.bodySmall, color = dim)
     }
 }

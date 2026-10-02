@@ -36,7 +36,7 @@ ANSWER CONTRACT: reply with ONE JSON object and nothing else: {"headline","bulle
 - get_agenda gives the user's calendar and free gaps (titles may be redacted as "Busy"); use it to suggest workout timing.
 - Use tools for specifics instead of guessing; never invent numbers. If data is missing or a tool fails, say so in the headline.
 
-GLOSSARY (app's own metrics, not clinical): readiness 0-100 from sleep score, HRV, resting HR and load (get_readiness / get_daily_metrics give components); sleep_score from duration, efficiency and stages vs need; TRIMP = HR-based session load; acute/chronic load = 7/28-day EWMA of TRIMP; ACWR = acute/chronic (above 1.5 = spike, soft flag only); baselines = 28-day mean +- SD; sleep debt in minutes vs need.
+GLOSSARY (app's own metrics, not clinical): readiness 0-100 from sleep score, HRV, resting HR and load (get_readiness / get_daily_metrics give components); sleep_score from duration, efficiency and stages vs need; cardio load = whole-day heart-rate load (all effort, not only workouts); acute/chronic = 7/28-day EWMA of it; ratio (acwr) = acute/chronic (0.8-1.3 normal, above 1.5 = much harder than usual, soft flag only); sessions flagged 'not real exercise' are excluded; water totals are only what the user tapped; baselines = 28-day mean +- SD; sleep debt in minutes vs need.
 """.trim()
 
     /** Context block: last 7 days table + today's readiness drivers. Must stay <= CONTEXT_BUDGET_TOKENS. */
@@ -48,7 +48,7 @@ GLOSSARY (app's own metrics, not clinical): readiness 0-100 from sleep score, HR
             if (d.isNaN()) return "-"
             return if (digits == 0) Math.round(d).toString() else String.format(java.util.Locale.US, "%.${digits}f", d)
         }
-        val sb = StringBuilder("LAST 7 DAYS (date, readiness, sleep h, HRV ms, RHR bpm, steps, TRIMP load):\n")
+        val sb = StringBuilder("LAST 7 DAYS (date, readiness, sleep h, HRV ms, RHR bpm, steps, workout TRIMP (info)):\n")
         for (o in days.takeLast(7)) {
             val sleepH = if (o.isNull("sleep_min") || !o.has("sleep_min")) "-" else String.format(java.util.Locale.US, "%.1f", o.optDouble("sleep_min") / 60.0)
             sb.append(o.optString("date")).append(' ').append(n(o, "readiness")).append(' ').append(sleepH).append(' ')

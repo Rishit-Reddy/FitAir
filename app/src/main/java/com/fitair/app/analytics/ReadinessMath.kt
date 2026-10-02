@@ -3,13 +3,13 @@ package com.fitair.app.analytics
 import com.fitair.app.core.Num
 
 /**
- * Readiness v2 arithmetic (pure). Five components, nominal weights sum to 1.0:
+ * Readiness v3 arithmetic (pure; v3 = the load component is the whole-day cardio load ratio). Five components, nominal weights sum to 1.0:
  *  sleep (the sleep score; it already contains duration) 0.30, hrv 0.25, resting_hr 0.15,
- *  load (ACWR only) 0.15, subjective (check-in mean) 0.15.
+ *  load (whole-day cardio load, acute/chronic ratio) 0.15, subjective (check-in mean) 0.15.
  * Missing components are dropped and the rest renormalised. Needs at least 2 components.
  */
 object ReadinessMath {
-    const val VERSION = 2
+    const val VERSION = 3
     const val MIN_COMPONENTS = 2
     val WEIGHTS = linkedMapOf("sleep" to 0.30, "hrv" to 0.25, "resting_hr" to 0.15, "load" to 0.15, "subjective" to 0.15)
     val LABELS = mapOf("sleep" to "Sleep", "hrv" to "HRV", "resting_hr" to "Resting HR",

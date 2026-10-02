@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -38,6 +39,9 @@ import com.fitair.app.ui.trends.TrendMetric
 import com.fitair.app.ui.trends.TrendScreen
 import com.fitair.app.ui.sleep.SleepScreen
 import com.fitair.app.ui.agenda.AgendaScreen
+import com.fitair.app.ui.components.DetailHeader
+import com.fitair.app.ui.load.LoadScreen
+import com.fitair.app.ui.theme.NavIcons
 import androidx.activity.compose.BackHandler
 import com.fitair.app.ui.today.TodayVm
 import java.io.IOException
@@ -209,9 +213,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private class TabSpec(val label: String, val off: androidx.compose.ui.graphics.vector.ImageVector, val on: androidx.compose.ui.graphics.vector.ImageVector)
+
 @Composable
 private fun MainContent(vm: MainViewModel) {
-    val tabs = listOf("Today", "Coach", "Log", "Settings")
+    // Today · Calendar · Coach · Log. Settings is behind the gear on Today.
+    val tabs = listOf(
+        TabSpec("Today", NavIcons.TodayOutline, NavIcons.TodayFilled),
+        TabSpec("Calendar", NavIcons.CalendarOutline, NavIcons.CalendarFilled),
+        TabSpec("Coach", NavIcons.CoachOutline, NavIcons.CoachFilled),
+        TabSpec("Log", NavIcons.LogOutline, NavIcons.LogFilled),
+    )
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val todayVm: TodayVm = viewModel()
     val coachVm: CoachVm = viewModel()
@@ -223,11 +235,17 @@ private fun MainContent(vm: MainViewModel) {
     if (dest != null) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
             when (dest) {
-                TodayDest.Agenda -> AgendaScreen(onBack = { dest = null })
+                // "Agenda" now lives in the Calendar tab
+                TodayDest.Agenda -> {}
                 TodayDest.Sleep -> SleepScreen(onBack = { dest = null })
                 TodayDest.Readiness -> TrendScreen(TrendMetric.Readiness) { dest = null }
                 TodayDest.Hrv -> TrendScreen(TrendMetric.Hrv) { dest = null }
                 TodayDest.RestingHr -> TrendScreen(TrendMetric.RestingHr) { dest = null }
+                TodayDest.Load -> LoadScreen(onBack = { dest = null })
+                TodayDest.Settings -> Column(Modifier.fillMaxSize()) {
+                    DetailHeader("Settings", onBack = { dest = null })
+                    Box(Modifier.weight(1f)) { SettingsScreen(vm) }
+                }
                 null -> {}
             }
         }
@@ -241,9 +259,12 @@ private fun MainContent(vm: MainViewModel) {
                 tabs.forEachIndexed { i, t ->
                     NavigationBarItem(
                         selected = tab == i, onClick = { tab = i },
-                        icon = {}, label = { Text(t, style = MaterialTheme.typography.labelLarge) },
+                        icon = { Icon(if (tab == i) t.on else t.off, contentDescription = null) },
+                        label = { Text(t.label, style = MaterialTheme.typography.labelLarge) },
                         alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             selectedTextColor = MaterialTheme.colorScheme.primary,
                             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             indicatorColor = MaterialTheme.colorScheme.background,
@@ -255,10 +276,10 @@ private fun MainContent(vm: MainViewModel) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(todayVm, onOpen = { dest = it }, scroll = todayScroll)
-                1 -> CoachScreen(coachVm)
-                2 -> LogScreen(vm)
-                else -> SettingsScreen(vm)
+                0 -> TodayScreen(todayVm, onOpen = { if (it == TodayDest.Agenda) tab = 1 else dest = it }, scroll = todayScroll, onOpenCalendar = { tab = 1 })
+                1 -> AgendaScreen(onBack = null, onOpenSettings = { dest = TodayDest.Settings })
+                2 -> CoachScreen(coachVm)
+                else -> LogScreen(vm)
             }
         }
     }

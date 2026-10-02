@@ -31,6 +31,9 @@ object BackupFiles {
         "daily_metrics" to Col("date", true), "checkin" to Col("date", true), "plan_item" to Col("date", true),
         "cal_event" to Col("begin_ms", false), "task" to Col("created_ms", false),
         "ai_call" to Col("ts", false), "chat_msg" to Col("ts", false),
+        "load_day" to Col("date", true), "exercise_flag" to Col("start_ms", false), "weight" to Col("t", false),
+        "chat_session" to Col("created_ms", false), "chat_turn" to Col("ts", false), "water" to Col("t", false),
+        "day_summary" to Col("date", true),
     )
 
     fun tablesOf(db: SQLiteDatabase): List<String> {
@@ -142,12 +145,12 @@ object BackupFiles {
 
     /**
      * Merges every known table of [snapshot] into the live database: ATTACH, then per table INSERT OR REPLACE for the columns both
-     * sides have, all in one transaction. Returns merged row count.
+     * sides have, all in one transaction. Returns the row count per table (rows read from the snapshot).
      */
-    fun merge(ctx: Context, snapshot: File): Long {
+    fun merge(ctx: Context, snapshot: File): Map<String, Long> {
         val db = LocalStore.get(ctx).db
         db.execSQL("ATTACH DATABASE ? AS snap", arrayOf<Any>(snapshot.absolutePath))
-        var rows = 0L
+        val counts = LinkedHashMap<String, Long>()
         try {
             fun cols(schema: String, t: String): List<String> {
                 val o = ArrayList<String>()
@@ -166,13 +169,13 @@ object BackupFiles {
                     if (common.isEmpty()) continue
                     val list = common.joinToString(",") { "\"$it\"" }
                     db.execSQL("INSERT OR REPLACE INTO main.$t($list) SELECT $list FROM snap.$t")
-                    rows += db.rawQuery("SELECT COUNT(*) FROM snap.$t", null).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+                    counts[t] = db.rawQuery("SELECT COUNT(*) FROM snap.$t", null).use { if (it.moveToFirst()) it.getLong(0) else 0L }
                 }
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
         } finally {
             try { db.execSQL("DETACH DATABASE snap") } catch (e: Exception) { AppLog.e("restore: detach failed", e) }
         }
-        return rows
+        return counts
     }
 }

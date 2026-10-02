@@ -78,6 +78,10 @@ private fun GeneralTab(vm: MainViewModel) = Page {
     SectionBreak()
     CalendarSection()
     SectionBreak()
+    WaterSection()
+    SectionBreak()
+    HeartRateSection()
+    SectionBreak()
     SectionHeader("Google Drive")
     Spacer(Modifier.height(Spacing.s))
     BackupSection()
@@ -217,6 +221,19 @@ private fun DiagnosticsTab(vm: MainViewModel) {
             }
             Hairline()
         }
+
+        SectionBreak()
+        SectionHeader("Analytics")
+        val rebuild by com.fitair.app.data.Rebuild.state.collectAsState()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(enabled = !rebuild.running, onClick = { com.fitair.app.data.Rebuild.start(ctx) }) {
+                Text(if (rebuild.running) "Rebuilding…" else "Rebuild analytics")
+            }
+            Text(if (rebuild.running) rebuild.detail else rebuild.lastResult.orEmpty(), style = Type.bodySmall, color = dim)
+        }
+        if (rebuild.running) LinearProgressIndicator(progress = { rebuild.pct / 100f }, modifier = Modifier.fillMaxWidth())
+        Text("Recomputes sleep scores, readiness and cardio load for every day with data. Safe to run again; it does not change your data.",
+            style = Type.bodySmall, color = dim)
 
         SectionBreak()
         SectionHeader("Debug bundle")

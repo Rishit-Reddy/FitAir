@@ -61,7 +61,7 @@ object SelfCheck {
                 val id = "steps_$label"; val title = "Steps $label vs Health Connect"
                 try {
                     val (lo, hi) = LocalApi.bounds(d, z)
-                    val ser = LocalApi.series(store.db, z, d, d, LocalApi.maxHr())
+                    val ser = LocalApi.series(store.db, z, d, d, LocalApi.maxHr(ctx))
                     val db = ser[d.toString()]?.steps ?: 0L
                     val hcN = hc.stepsTotal(Instant.ofEpochMilli(lo), Instant.ofEpochMilli(minOf(hi, System.currentTimeMillis())))
                     when {
@@ -185,6 +185,34 @@ object SelfCheck {
                 parts.add("$table: " + (if (o.isEmpty()) "none" else o.joinToString(", ")))
             }
             add("origins", "Data sources per type (7 days)", CheckStatus.PASS, parts.joinToString("\n"))
+        }
+
+        // 8. whole-day cardio load present for recent days that have heart rate
+        guarded("load_day", "Cardio load computed") {
+            val rows = com.fitair.app.data.dao.LoadDao.rows(ctx, today.minusDays(13), today).associateBy { it.date }
+            val missing = ArrayList<String>()
+            for (k in 0..13) {
+                val d = today.minusDays(k.toLong()); val (lo, hi) = LocalApi.bounds(d, z)
+                val hasHr = store.db.rawQuery("SELECT 1 FROM hr_30s WHERE t30>=? AND t30<? LIMIT 1", arrayOf(lo.toString(), hi.toString())).use { it.moveToFirst() }
+                if (hasHr && rows[d.toString()] == null) missing.add(d.toString())
+            }
+            add("load_day", "Cardio load computed", if (missing.isEmpty()) CheckStatus.PASS else CheckStatus.WARN,
+                if (missing.isEmpty()) "${rows.size}/14 recent days have a load value" else "missing for ${missing.take(3).joinToString(", ")}" +
+                    (if (missing.size > 3) " (+${missing.size - 3} more)" else "") + "; Diagnostics > Rebuild analytics repairs this")
+        }
+
+        // 9. every date with a main sleep has daily_metrics.sleep_min (restore / first-sync race, docs/PLAN_081.md 7.4)
+        guarded("sleep_metrics", "Sleep history complete") {
+            val sleepDates = sortedSetOf<String>()
+            store.db.rawQuery("SELECT end_ms FROM sleep WHERE end_ms-start_ms>=?", arrayOf((90 * 60_000L).toString())).use {
+                while (it.moveToNext()) sleepDates.add(Instant.ofEpochMilli(it.getLong(0)).atZone(z).toLocalDate().toString())
+            }
+            val have = HashSet<String>()
+            store.db.rawQuery("SELECT date FROM daily_metrics WHERE sleep_min IS NOT NULL", null).use { while (it.moveToNext()) have.add(it.getString(0)) }
+            val bad = sleepDates.filter { it !in have }
+            add("sleep_metrics", "Sleep history complete", if (bad.isEmpty()) CheckStatus.PASS else CheckStatus.FAIL,
+                if (bad.isEmpty()) "${sleepDates.size} dates with a main sleep all have sleep minutes"
+                else "${bad.size} of ${sleepDates.size} dates lack sleep minutes, first: ${bad.take(3).joinToString(", ")}; Diagnostics > Rebuild analytics repairs this")
         }
         return out
     }

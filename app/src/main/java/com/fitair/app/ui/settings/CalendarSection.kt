@@ -38,6 +38,24 @@ fun CalendarSection() {
     val prefs = remember { ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE) }
     var share by remember { mutableStateOf(prefs.getBoolean(PREF_COACH_SHARE_TITLES, false)) }
 
+    var showHowTo by remember { mutableStateOf<CalendarInfo?>(null) }
+    showHowTo?.let { c ->
+        AlertDialog(
+            onDismissRequest = { showHowTo = null },
+            title = { Text("Turn on sync") },
+            text = { Text("This calendar is not synced to your phone, so it has no events here. In Google Calendar open Settings › ${c.name} › Sync. " +
+                "Subscribed (URL) calendars are refreshed by Google only every few hours, sometimes up to a day.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showHowTo = null
+                    val i = ctx.packageManager.getLaunchIntentForPackage("com.google.android.calendar")
+                    if (i != null) try { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
+                }) { Text("Open Google Calendar") }
+            },
+            dismissButton = { TextButton(onClick = { showHowTo = null }) { Text("Close") } },
+        )
+    }
+
     SectionHeader("Calendar")
     Spacer(Modifier.height(Spacing.s))
     if (!granted) {
@@ -59,7 +77,9 @@ fun CalendarSection() {
                 Column(Modifier.weight(1f)) {
                     Text(c.name, style = Type.body, maxLines = 1)
                     if (c.account.isNotBlank()) Text(c.account, style = Type.bodySmall, color = dim, maxLines = 1)
+                    if (!c.syncing) Text("Not synced to this phone", style = Type.bodySmall, color = dim)
                 }
+                if (!c.syncing) TextButton(onClick = { showHowTo = c }) { Text("How to turn on", style = Type.label) }
             }
         }
     }

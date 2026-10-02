@@ -5,7 +5,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.TextButton
+import com.fitair.app.ui.components.ExplainSheet
+import com.fitair.app.ui.copy.Copy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +66,8 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
     val nights = remember(all, vm.range) { SleepModel.lastN(all, vm.range) }
     val withData = nights.count { it.hasData }
     val default = remember(all) { SleepModel.defaultNight(all) }
+    var explain by remember { mutableStateOf<String?>(null) }
+    explain?.let { ExplainSheet(it, onDismiss = { explain = null }) }
     Page(modifier) {
         if (default == null) {
             EmptyState("No sleep data yet", "Sync Health Connect, then check back.")
@@ -70,7 +78,7 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
         val sel = all.firstOrNull { it.date == vm.selected } ?: last
         SectionHeader("Last night · ${last.date.format(dateFmt)}")
         Spacer(Modifier.height(Spacing.s))
-        Detail(last, vm.detailFor(last.date))
+        Detail(last, vm.detailFor(last.date), onExplain = { explain = "sleep" })
 
         SectionBreak()
         SectionHeader("History")
@@ -83,8 +91,8 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
         }
         Row(Modifier.fillMaxWidth()) {
             Stat("Avg sleep", hm(SleepModel.avgSleepMin(nights)), Modifier.weight(1f))
-            Stat("Avg score", SleepModel.avgScore(nights)?.let { "${Math.round(it)}" } ?: Format.DASH, Modifier.weight(1f))
-            Stat("7-day debt", SleepModel.latestDebtMin(nights)?.let { hm(it) } ?: Format.DASH, Modifier.weight(1f))
+            Stat("Average night score", SleepModel.avgScore(nights)?.let { "${Math.round(it)}" } ?: Format.DASH, Modifier.weight(1f))
+            Stat("Short over 7 nights", SleepModel.latestDebtMin(nights)?.let { hm(it) } ?: Format.DASH, Modifier.weight(1f))
         }
         Spacer(Modifier.height(Spacing.l))
 
@@ -139,9 +147,7 @@ private fun SelectedNight(n: Night, d: NightDetail?, isDefault: Boolean, onBack:
         Row(verticalAlignment = Alignment.CenterVertically) {
             val window = if (d?.bedtime != null) " · ${d.bedtime} – ${d.wake}" else ""
             Text(hm(n.sleepMin) + window, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val tone = SleepModel.tone(n.score)
-            if (tone != Tone.Neutral) { StatusDot(toneColor(tone)); Spacer(Modifier.width(Spacing.s)) }
-            Text(n.score?.let { "${Math.round(it)}/100" } ?: Format.DASH, style = MaterialTheme.typography.bodyLarge)
+            VerdictScore(n.score)
         }
         Spacer(Modifier.height(Spacing.s))
         val st = d?.stages
@@ -152,7 +158,7 @@ private fun SelectedNight(n: Night, d: NightDetail?, isDefault: Boolean, onBack:
 
 /** Top block: duration, score, window, stages, component cards. */
 @Composable
-private fun Detail(n: Night, d: NightDetail?) {
+private fun Detail(n: Night, d: NightDetail?, onExplain: () -> Unit) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     if (!n.hasData) {
         Text("No sleep recorded.", style = Type.bodySmall, color = dim)
@@ -160,9 +166,7 @@ private fun Detail(n: Night, d: NightDetail?) {
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(hm(n.sleepMin), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-        val tone = SleepModel.tone(n.score)
-        if (tone != Tone.Neutral) { StatusDot(toneColor(tone)); Spacer(Modifier.width(Spacing.s)) }
-        Text(n.score?.let { "${Math.round(it)} / 100" } ?: Format.DASH, style = MaterialTheme.typography.bodyLarge)
+        VerdictScore(n.score)
     }
     Spacer(Modifier.height(Spacing.s))
     ScoreBar(n.score, SleepModel.tone(n.score), Modifier.fillMaxWidth())
@@ -171,10 +175,13 @@ private fun Detail(n: Night, d: NightDetail?) {
     val st = d?.stages
     if (st == null) {
         Text(if (d == null) "Loading…" else "No stage data for this night.", style = Type.bodySmall, color = dim)
-    } else StageBar(st.awake, st.light, st.rem, st.deep)
+    } else StageBar(st.awake, st.light, st.rem, st.deep, height = 32.dp, legend = true)
 
     Spacer(Modifier.height(Spacing.l))
-    SectionHeader("Score components")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionHeader("What made the score", Modifier.weight(1f))
+        TextButton(onClick = onExplain) { Text("What is this?", style = Type.label) }
+    }
     Spacer(Modifier.height(Spacing.s))
     val cards = SleepModel.componentCards(n)
     cards.chunked(2).forEachIndexed { r, row ->
@@ -184,7 +191,7 @@ private fun Detail(n: Night, d: NightDetail?) {
         }
     }
     Text(
-        "Score = duration 40% · efficiency 25% · deep+REM 20% · regularity 15%. Duration is vs your need; the others vs healthy ranges.",
+        "Score = enough sleep 40% · restful 25% · deep + dream sleep 20% · same-time sleep 15%. Enough sleep is compared with your own need; the others with healthy ranges.",
         style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.m),
     )
 }
@@ -209,4 +216,14 @@ private fun ComponentCardView(c: ComponentCard, modifier: Modifier) {
             Text(" ", style = Type.bodySmall, modifier = Modifier.padding(top = Spacing.xs))
         }
     }
+}
+
+/** "Good night" first (with its tier dot), the score as a dim number after it. */
+@Composable
+private fun VerdictScore(score: Double?) {
+    val v = Copy.sleepNight(score)
+    if (v.headline.isEmpty()) return
+    StatusDot(toneColor(v.tone)); Spacer(Modifier.width(Spacing.s))
+    Text(v.headline, style = MaterialTheme.typography.bodyLarge)
+    Text("  ${Math.round(score!!)}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

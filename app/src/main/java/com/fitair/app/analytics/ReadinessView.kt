@@ -17,6 +17,9 @@ class ReadinessView(
     /** The single reason shown under the number. */
     val mainDriver: String? get() = drivers.firstOrNull()?.text
 
+    /** The same reason in everyday words (no SD, baseline or ratios); the stored text stays for the Details view. */
+    val mainDriverPlain: String? get() = drivers.firstOrNull()?.let { com.fitair.app.ui.copy.Copy.driver(it.key, it.score, it.text).headline }
+
     companion object {
         fun parse(json: String?): ReadinessView? {
             if (json.isNullOrEmpty() || json == "null") return null

@@ -4,6 +4,7 @@ import android.content.Context
 import com.fitair.app.analytics.ReadinessMath
 import com.fitair.app.analytics.SleepMath
 import com.fitair.app.core.Num
+import com.fitair.app.data.dao.LoadDao
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
@@ -18,21 +19,20 @@ import java.util.Locale
  *      restorative 0.20 ((deep+REM) / asleep; 38% -> 100),
  *      consistency 0.15 (std dev of sleep midpoints over 7 nights; <=20 min -> 100, >=90 min -> 0).
  *    sleep_debt_min = sum over the last 7 nights with data of max(0, need - asleep).
- *  - load: Banister TRIMP per exercise (male coefficients 0.64 * e^(1.92 * HRr)) integrated over the in-window heart rate,
- *    HRr = (HR - rest) / (HRmax - rest), rest = mean resting HR of the prior 28 days (60 if unknown).
- *    acute = EWMA 7 d, chronic = EWMA 28 d, acwr = acute / chronic (null if chronic < 1 or < 14 days of history).
- *  - readiness v2: see ReadinessMath (sleep score, HRV, resting HR, ACWR load, check-in), version stored in readiness_json;
- *    rows are frozen for days older than 2 days, except the one-time v2 recompute ([migrateIfNeeded]).
+ *  - load: whole-day heart-rate cardio load (CardioLoad, stored in load_day by LoadDao); acute = EWMA 7 d, chronic = EWMA 28 d,
+ *    acwr = acute / chronic (null if chronic < 1 or < 14 days of history). load_trimp is the old Banister TRIMP of the
+ *    (unflagged) exercise sessions, information only.
+ *  - readiness v3: see ReadinessMath (sleep score, HRV, resting HR, whole-day load ratio, check-in), version stored in readiness_json;
+ *    rows older than 2 days are frozen unless incomplete (inputs exist that the row lacks), forced, or rebuilt ([rebuildAll]).
  *  - insights: conservative rules, suppressed with < 7 days of history. Not medical advice.
  */
 object DailyMetrics {
     private const val HIST_DAYS = 90
-    private const val CHRONIC_EPS = 1.0
-    private const val MIN_HISTORY = 14
     private const val MIN_BASE = 7
     private const val STALE_MS = 10 * 60_000L
     private val SLEEP_W = SleepMath.WEIGHTS
-    private const val MIG_READINESS_V2 = "readiness_v2_done"
+    private const val MIG_READINESS = "readiness_v3_done"
+    private val lock = Any()
     private const val MIG_DAYS = 120
 
     fun stored(ctx: Context, date: String): JSONObject? = LocalStore.get(ctx).getDaily(date, date).firstOrNull()
@@ -45,21 +45,103 @@ object DailyMetrics {
         return stored(ctx, date) ?: JSONObject()
     }
 
-    /** Recomputes the last [days] days (days older than 2 days are only filled in when missing). */
+    /**
+     * Recomputes the last [days] days (days older than 2 days are only filled in when missing) and repairs older rows that are
+     * incomplete, i.e. rows computed before their sleep / steps / heart-rate inputs had been synced.
+     */
     fun recomputeRecent(ctx: Context, days: Int) {
         val today = LocalDate.now(ZoneId.systemDefault())
         computeDates(ctx, (days.coerceAtLeast(1) - 1 downTo 0).map { today.minusDays(it.toLong()) }, false)
+        repairIncomplete(ctx, today.minusDays(MIG_DAYS.toLong()), today.minusDays(2))
     }
 
-    /** One-time (meta flag) forced recompute of the last 120 days after the readiness v2 change. Call from an IO thread. */
-    @Synchronized
-    fun migrateIfNeeded(ctx: Context) {
+    /** True when the app has completed at least one sync (so a recompute can see real data). */
+    private fun hasSynced(ctx: Context): Boolean =
+        ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE).getLong(SyncPrefs.LAST, 0L) > 0L
+
+    /**
+     * One-time (meta flag) forced recompute of the last 120 days after the readiness v3 change. Call from an IO thread.
+     * It does nothing before the first completed sync: running it earlier would store (and freeze) empty rows.
+     */
+    fun migrateIfNeeded(ctx: Context) = synchronized(lock) {
         val store = LocalStore.get(ctx)
-        if (store.metaGet(MIG_READINESS_V2) != null) return
+        if (store.metaGet(MIG_READINESS) != null) return@synchronized
+        if (!hasSynced(ctx) || !hasInputs(store)) { AppLog.d("readiness v3 migration: waiting for the first sync"); return@synchronized }
         val today = LocalDate.now(ZoneId.systemDefault())
-        AppLog.d("readiness v2: recomputing last $MIG_DAYS days")
+        AppLog.d("readiness v3: recomputing last $MIG_DAYS days")
         computeDates(ctx, (MIG_DAYS - 1 downTo 0).map { today.minusDays(it.toLong()) }, true)
-        store.metaSet(MIG_READINESS_V2, ReadinessMath.VERSION.toString())
+        store.metaSet(MIG_READINESS, ReadinessMath.VERSION.toString())
+    }
+
+    private fun hasInputs(store: LocalStore): Boolean =
+        listOf("sleep", "hr_30s", "steps").any { t -> store.db.rawQuery("SELECT 1 FROM $t LIMIT 1", null).use { it.moveToFirst() } }
+
+    /** Forced recompute of every date from [from] to today (used after a Drive restore edits history). */
+    fun recomputeFrom(ctx: Context, from: LocalDate) {
+        val today = LocalDate.now(ZoneId.systemDefault())
+        val start = maxOf(from, today.minusDays(MIG_DAYS.toLong() + 90))
+        computeDates(ctx, LocalApi.daysBetween(start, today), true)
+    }
+
+    /** Earliest local date with any sleep / hr_30s / steps row, or null on an empty database. */
+    fun earliestDataDate(ctx: Context): LocalDate? {
+        val db = LocalStore.get(ctx).db
+        var min = Long.MAX_VALUE
+        for ((t, c) in listOf("sleep" to "end_ms", "hr_30s" to "t30", "steps" to "start_ms")) {
+            db.rawQuery("SELECT MIN($c) FROM $t", null).use { if (it.moveToFirst() && !it.isNull(0)) min = minOf(min, it.getLong(0)) }
+        }
+        if (min == Long.MAX_VALUE || min < 946684800000L) return null
+        return java.time.Instant.ofEpochMilli(min).atZone(ZoneId.systemDefault()).toLocalDate()
+    }
+
+    /**
+     * Forced recompute (30-day chunks, oldest first) of daily_metrics and load_day from the earliest data to today.
+     * [onProgress] gets 0..100. Returns the number of days. Logs "rebuild: N days in X ms".
+     */
+    fun rebuildAll(ctx: Context, onProgress: (Int) -> Unit = {}): Int {
+        val t0 = System.currentTimeMillis()
+        val today = LocalDate.now(ZoneId.systemDefault())
+        val first = earliestDataDate(ctx) ?: return 0
+        val all = LocalApi.daysBetween(first, today)
+        val chunks = all.chunked(30)
+        onProgress(0)
+        for ((i, ch) in chunks.withIndex()) {
+            computeDates(ctx, ch, true)
+            onProgress(((i + 1) * 100) / chunks.size)
+        }
+        LocalStore.get(ctx).metaSet(MIG_READINESS, ReadinessMath.VERSION.toString())  // everything is at the current version now
+        AppLog.d("rebuild: ${all.size} days in ${System.currentTimeMillis() - t0} ms")
+        return all.size
+    }
+
+    /** Dates in [from, to] whose stored row lacks inputs that exist now (sleep, steps or heart rate), oldest first. */
+    fun incompleteDates(ctx: Context, from: LocalDate, to: LocalDate): List<LocalDate> {
+        if (to.isBefore(from)) return emptyList()
+        val store = LocalStore.get(ctx)
+        val z = ZoneId.systemDefault()
+        val rows = store.getDaily(from.toString(), to.toString()).associateBy { it.optString("date") }
+        val load = LoadDao.rows(ctx, from, to).associateBy { it.date }
+        val out = ArrayList<LocalDate>()
+        fun has(sql: String, a: String, b: String) = store.db.rawQuery(sql, arrayOf(a, b)).use { it.moveToFirst() }
+        for (d in LocalApi.daysBetween(from, to)) {
+            val row = rows[d.toString()] ?: continue
+            val (lo, hi) = LocalApi.bounds(d, z)
+            val l = lo.toString(); val h = hi.toString()
+            val bad = (!row.has("sleep_min") && has("SELECT 1 FROM sleep WHERE end_ms>=? AND end_ms<? LIMIT 1", l, h)) ||
+                (row.optLong("steps", 0L) == 0L && has("SELECT 1 FROM steps WHERE start_ms>=? AND start_ms<? LIMIT 1", l, h)) ||
+                (((load[d.toString()]?.coverage ?: 0.0) <= 0.0 && (load[d.toString()]?.cardio ?: 0.0) <= 0.0) &&
+                    has("SELECT 1 FROM hr_30s WHERE t30>=? AND t30<? LIMIT 1", l, h))
+            if (bad) out.add(d)
+        }
+        return out
+    }
+
+    private fun repairIncomplete(ctx: Context, from: LocalDate, to: LocalDate) {
+        try {
+            val bad = incompleteDates(ctx, from, to)
+            if (bad.isNotEmpty()) { AppLog.d("DailyMetrics: repairing ${bad.size} incomplete day(s)"); computeDates(ctx, bad, true) }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Exception) { AppLog.e("DailyMetrics repair failed", e) }
     }
 
     /** Fills missing rows in [from, to] and refreshes rows of the last 2 days when older than 10 min. */
@@ -75,6 +157,7 @@ object DailyMetrics {
             else today.toEpochDay() - d.toEpochDay() <= 1 && now - row.optLong("computed_ms", 0) > STALE_MS
         }.takeLast(120)
         if (todo.isNotEmpty()) computeDates(ctx, todo, false)
+        repairIncomplete(ctx, LocalDate.parse(from), minOf(LocalDate.parse(to), today.minusDays(2)))
     }
 
     // ---------- core ----------
@@ -85,9 +168,14 @@ object DailyMetrics {
         fun day(d: LocalDate) = ser[d.toString()]
     }
 
-    private class Load(val trimp: Double, val acute: Double, val chronic: Double, val history: Int)
+    /** [trimp] = old exercise TRIMP (information); acute/chronic/ratio = whole-day cardio load from load_day. */
+    private class Load(val trimp: Double, val acute: Double?, val chronic: Double?, val ratio: Double?)
 
-    private fun computeDates(ctx: Context, dates: List<LocalDate>, force: Boolean) {
+    private fun computeDates(ctx: Context, dates: List<LocalDate>, force: Boolean) = synchronized(lock) {
+        computeDatesLocked(ctx, dates, force)
+    }
+
+    private fun computeDatesLocked(ctx: Context, dates: List<LocalDate>, force: Boolean) {
         if (dates.isEmpty()) return
         val t0 = System.currentTimeMillis()
         val store = LocalStore.get(ctx)
@@ -98,10 +186,12 @@ object DailyMetrics {
             force || existing[d.toString()] == null || today.toEpochDay() - d.toEpochDay() <= 1
         }
         if (todo.isEmpty()) return
-        val mh = LocalApi.maxHr()
+        val mh = LoadDao.hrMax(ctx).value
+        try { LoadDao.compute(ctx, todo, force) } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Exception) { AppLog.e("load_day failed (readiness load driver will be missing)", e) }
         val ser = LocalApi.series(store.db, z, todo.min().minusDays(HIST_DAYS.toLong()), todo.max(), mh)
         val c = Ctx(ser, mh, z, store.db)
-        val loads = loadSeries(c)
+        val loads = loadSeries(c, LoadDao.rows(ctx, todo.min(), todo.max()).associateBy { it.date })
         for (d in todo) {
             try {
                 store.upsertDaily(row(c, d, loads, z))
@@ -117,7 +207,7 @@ object DailyMetrics {
     private fun row(c: Ctx, d: LocalDate, loads: Map<String, Load>, z: ZoneId): JSONObject {
         val day = c.day(d)!!
         val ld = loads[d.toString()]
-        val acwr = if (ld != null && ld.history >= MIN_HISTORY && ld.chronic >= CHRONIC_EPS) ld.acute / ld.chronic else null
+        val acwr = ld?.ratio
         val (sleepScore, sleepJson) = sleepScore(c, d)
         val extras = LocalApi.Extras(sleepScore, acwr, ld?.acute, ld?.chronic, checkinMean(c, d))
         val ready = LocalApi.readiness(c.ser, d, c.mh, extras)
@@ -143,28 +233,20 @@ object DailyMetrics {
 
     // ---------- training load ----------
 
-    private fun loadSeries(c: Ctx): Map<String, Load> {
+    private fun loadSeries(c: Ctx, rows: Map<String, com.fitair.app.data.dao.LoadDayRow>): Map<String, Load> {
         val dates = c.ser.keys.map { LocalDate.parse(it) }.sorted()
         val lo = LocalApi.bounds(dates.first(), c.z).first
         val hi = LocalApi.bounds(dates.last(), c.z).second
         val perDay = HashMap<String, Double>()
-        for (ex in LocalApi.exercises(c.db, lo, hi)) {
+        for (ex in LocalApi.exercises(c.db, lo, hi)) {  // flagged (not real exercise) sessions are left out
             val ds = java.time.Instant.ofEpochMilli(ex.start).atZone(c.z).toLocalDate()
             val rest = restingBaseline(c, ds)
             perDay[ds.toString()] = (perDay[ds.toString()] ?: 0.0) + trimp(c.db, ex, rest, c.mh)
         }
         val out = HashMap<String, Load>()
-        val a7 = 2.0 / 8; val a28 = 2.0 / 29
-        var acute = 0.0; var chronic = 0.0; var first = -1
-        for ((i, d) in dates.withIndex()) {
-            val day = c.ser[d.toString()]!!
-            val x = perDay[d.toString()] ?: 0.0
-            if (first < 0 && (day.steps != 0L || day.hrMean != null || day.sleepMin != null || x > 0)) {
-                first = i; acute = x; chronic = x
-            } else if (first >= 0) {
-                acute += a7 * (x - acute); chronic += a28 * (x - chronic)
-            }
-            if (first >= 0) out[d.toString()] = Load(x, acute, chronic, i - first + 1)
+        for (d in dates) {
+            val r = rows[d.toString()]
+            out[d.toString()] = Load(perDay[d.toString()] ?: 0.0, r?.acute, r?.chronic, r?.ratio)
         }
         return out
     }
@@ -322,9 +404,9 @@ object DailyMetrics {
         }
         if (acwr != null && ld != null) {
             if (acwr > 1.5) out.put(insight("acwr_high", if (acwr > 2.0) "alert" else "watch", "Training load ramping up fast",
-                f("Acute:chronic load ratio is %.2f (7-day load %.0f vs 28-day %.0f). Rapid increases are associated with higher injury and fatigue risk; consider an easier day.", acwr, ld.acute, ld.chronic)))
+                f("Acute:chronic load ratio is %.2f (7-day load %.0f vs 28-day %.0f). Rapid increases are associated with higher injury and fatigue risk; consider an easier day.", acwr, ld.acute ?: 0.0, ld.chronic ?: 0.0)))
             else if (acwr < 0.8) out.put(insight("acwr_low", "info", "Training load below your recent norm",
-                f("Acute:chronic load ratio is %.2f (7-day load %.0f vs 28-day %.0f). Fine during a planned rest or deload; if not planned, you may be losing fitness.", acwr, ld.acute, ld.chronic)))
+                f("Acute:chronic load ratio is %.2f (7-day load %.0f vs 28-day %.0f). Fine during a planned rest or deload; if not planned, you may be losing fitness.", acwr, ld.acute ?: 0.0, ld.chronic ?: 0.0)))
         }
         if (rz0 != null && rz0 >= 1.5 && hz != null && hz <= -1.5) {
             val rr = respOf(c, d)

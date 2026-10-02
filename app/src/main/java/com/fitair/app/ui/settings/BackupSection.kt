@@ -26,9 +26,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private fun startBackup(ctx: Context) {
+private fun startBackup(ctx: Context, confirmedReplace: Boolean = false) {
     DriveBackup.markQueued()
-    DriveScheduler.backupNow(ctx)
+    DriveScheduler.backupNow(ctx, confirmedReplace)
+}
+
+/** First connect on a device that never backed up/restored: no automatic upload (it could replace a good backup from another device). */
+private fun afterConnect(ctx: Context, prefs: SharedPreferences) {
+    DriveBackup.onConnected(ctx)
+    if (DrivePrefs.firstDone(prefs)) startBackup(ctx)
 }
 
 /** Self-contained Google Drive backup block: connect, back up now, progress, last backup, restore, optional passphrase. */
@@ -49,6 +55,9 @@ fun BackupSection() {
     val lastMs = remember(tick) { prefs.getLong(DrivePrefs.LAST, 0L) }
     val sizeB = remember(tick) { prefs.getLong(DrivePrefs.SIZE, 0L) }
     val failedBefore = remember(tick) { prefs.getBoolean(DrivePrefs.FAILED, false) }
+    val firstDone = remember(tick) { DrivePrefs.firstDone(prefs) }
+    val pendingReplace by DriveBackup.pendingReplace.collectAsState()
+    val rebuild by com.fitair.app.data.Rebuild.state.collectAsState()
     val live by DriveBackup.state.collectAsState()
     val notice by DriveBackup.notice.collectAsState()
     val st = if (live.phase == BackupPhase.Idle && failedBefore) live.copy(phase = BackupPhase.Failed) else live
@@ -67,7 +76,7 @@ fun BackupSection() {
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         try {
             val res = Identity.getAuthorizationClient(ctx).getAuthorizationResultFromIntent(r.data)
-            if (res.accessToken != null) { DriveBackup.onConnected(ctx); startBackup(ctx) } else AppLog.d("drive: consent returned no token")
+            if (res.accessToken != null) afterConnect(ctx, prefs) else AppLog.d("drive: consent returned no token")
         } catch (e: Exception) { AppLog.e("drive: consent cancelled/failed", e) }
     }
     fun connect() {
@@ -75,7 +84,7 @@ fun BackupSection() {
             AppLog.d("drive: connect tapped")
             when (val a = DriveAuth.authorize(ctx)) {
                 is DriveAuth.NeedsResolution -> consent.launch(IntentSenderRequest.Builder(a.intent).build())
-                is DriveAuth.Token -> { DriveBackup.onConnected(ctx); startBackup(ctx) }
+                is DriveAuth.Token -> afterConnect(ctx, prefs)
                 is DriveAuth.Failed -> AppLog.e("drive: connect failed", a.error)
             }
         }
@@ -121,6 +130,19 @@ fun BackupSection() {
                     color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.outlineVariant,
                 )
+            }
+        }
+        if (rebuild.running) {
+            Text(rebuild.detail.ifEmpty { "Rebuilding analytics" }, style = MaterialTheme.typography.bodySmall, color = dim)
+            LinearProgressIndicator(progress = { rebuild.pct / 100f }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.outlineVariant)
+        } else rebuild.lastResult?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = dim) }
+        if (connected && !firstDone && !busy) {
+            Text("This device has not backed up or restored yet. If you already have a backup from another device, restore it first.",
+                style = MaterialTheme.typography.bodySmall, color = dim, modifier = Modifier.padding(vertical = 4.dp))
+            Row {
+                TextButton(onClick = { DriveBackup.clearNotice(); restorePass = ""; restoreOpen = true }) { Text("Restore from Drive") }
+                TextButton(onClick = { DriveBackup.clearNotice(); startBackup(ctx) }) { Text("Back up this device") }
             }
         }
         notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = dim, modifier = Modifier.padding(vertical = 2.dp)) }
@@ -179,6 +201,22 @@ fun BackupSection() {
                 style = MaterialTheme.typography.bodySmall, color = dim,
             )
         }
+    }
+
+    pendingReplace?.let { info ->
+        val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(info.modifiedMs))
+        AlertDialog(
+            onDismissRequest = { DriveBackup.clearPendingReplace() },
+            title = { Text("Replace the backup in Drive?") },
+            text = { Text(com.fitair.app.backup.BackupGuard.confirmText(date, info.sizeBytes)) },
+            confirmButton = { TextButton(onClick = { DriveBackup.clearPendingReplace(); startBackup(ctx, true) }) { Text("Replace") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { DriveBackup.clearPendingReplace(); restorePass = ""; restoreOpen = true }) { Text("Restore first") }
+                    TextButton(onClick = { DriveBackup.clearPendingReplace() }) { Text("Cancel") }
+                }
+            },
+        )
     }
 
     if (restoreOpen) {

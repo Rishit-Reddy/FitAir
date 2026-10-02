@@ -272,6 +272,8 @@ class LocalStore private constructor(private val ctx: Context) :
                     "distance" -> d.replace(type, span(r, origin).p("meters", r.getDouble("meters")))
                     "total_calories" -> d.replace(type, span(r, origin).p("kcal", r.getDouble("kcal")))
                     "exercise" -> d.replace(type, span(r, origin).p("type", r.getInt("type")).p("title", r.optString("title", "")))
+                    "water" -> d.replace(type, cv().p("t", r.getLong("t")).p("ml", r.getDouble("ml")).p("origin", origin)
+                        .also { v -> if (r.has("hc_id") && !r.isNull("hc_id")) v.put("hc_id", r.getString("hc_id")) })
                     "sleep" -> {
                         val start = r.getLong("start")
                         d.replace("sleep", span(r, origin))

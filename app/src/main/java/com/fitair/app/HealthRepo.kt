@@ -7,7 +7,11 @@ import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.BodyFatRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.HydrationRecord
+import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.units.Volume
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
@@ -53,6 +57,22 @@ object HealthPerms {
         HealthPermission.getWritePermission(TotalCaloriesBurnedRecord::class),
     )
     val all: Set<String> = read + write
+
+    /**
+     * Permissions asked in context, never in the startup gate (adding them to [all] would lock the app on update):
+     * hydration (water logging) and, from 0.8.2, weight / body fat.
+     */
+    val optional: Set<String> = setOf(
+        HealthPermission.getReadPermission(HydrationRecord::class),
+        HealthPermission.getWritePermission(HydrationRecord::class),
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getWritePermission(WeightRecord::class),
+        HealthPermission.getReadPermission(BodyFatRecord::class),
+    )
+    val hydration: Set<String> = setOf(
+        HealthPermission.getReadPermission(HydrationRecord::class),
+        HealthPermission.getWritePermission(HydrationRecord::class),
+    )
 }
 
 data class ProbeRow(
@@ -75,6 +95,45 @@ class HealthRepo(private val context: Context) {
 
     suspend fun hasHistoryPermission(): Boolean =
         client.permissionController.getGrantedPermissions().contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+
+    /** Granted subset of [HealthPerms.optional]. Empty if Health Connect is unavailable. */
+    suspend fun grantedOptional(): Set<String> = try {
+        client.permissionController.getGrantedPermissions().intersect(HealthPerms.optional)
+    } catch (e: Throwable) { emptySet() }
+
+    suspend fun canWriteHydration(): Boolean = try {
+        client.permissionController.getGrantedPermissions().contains(HealthPermission.getWritePermission(HydrationRecord::class))
+    } catch (e: Throwable) { false }
+
+    suspend fun canReadHydration(): Boolean = try {
+        client.permissionController.getGrantedPermissions().contains(HealthPermission.getReadPermission(HydrationRecord::class))
+    } catch (e: Throwable) { false }
+
+    /** Writes one drink; [clientId] makes the record idempotent and lets [deleteHydration] remove it. Returns the HC record id or null. */
+    suspend fun writeHydration(tMs: Long, ml: Double, clientId: String): String? {
+        val start = Instant.ofEpochMilli(tMs); val end = Instant.ofEpochMilli(tMs + 1000)
+        val z = ZoneId.systemDefault().rules
+        val rec = HydrationRecord(
+            startTime = start, startZoneOffset = z.getOffset(start), endTime = end, endZoneOffset = z.getOffset(end),
+            volume = Volume.milliliters(ml), metadata = Metadata.manualEntry(clientRecordId = clientId),
+        )
+        return client.insertRecords(listOf(rec)).recordIdsList.firstOrNull()
+    }
+
+    suspend fun deleteHydration(clientId: String) {
+        client.deleteRecords(HydrationRecord::class, emptyList(), listOf(clientId))
+    }
+
+    /** Hydration records from other apps in [from, to) as {t, ml, origin, hc_id}; this app's own records are skipped. */
+    suspend fun readHydration(from: Instant, to: Instant): List<JSONObject> {
+        val out = ArrayList<JSONObject>()
+        pages(HydrationRecord::class, from, to, { out.addAll(it) }) { r ->
+            if (r.metadata.dataOrigin.packageName == context.packageName) emptyList()
+            else listOf(JSONObject().put("t", r.startTime.toEpochMilli()).put("ml", r.volume.inMilliliters)
+                .put("origin", r.metadata.dataOrigin.packageName).put("hc_id", r.metadata.id))
+        }
+        return out
+    }
 
     /** Reads [type] records in [from, to) page by page; [onPage] gets API.md-shaped JSON entries per page. */
     suspend fun readForSync(type: String, from: Instant, to: Instant, onPage: suspend (List<JSONObject>) -> Unit) {
@@ -257,6 +316,9 @@ class HealthRepo(private val context: Context) {
         rows += probeType("TotalCaloriesBurned", TotalCaloriesBurnedRecord::class, from, to) { it.startTime }
         rows += probeType("RespiratoryRate", RespiratoryRateRecord::class, from, to) { it.time }
         rows += probeType("Vo2Max", Vo2MaxRecord::class, from, to) { it.time }
+        // Optional permissions: an ERR row here just means "not granted yet" (nothing is requested by the probe).
+        rows += probeType("Weight", WeightRecord::class, from, to) { it.time }
+        rows += probeType("Hydration", HydrationRecord::class, from, to) { it.startTime }
         return rows
     }
 

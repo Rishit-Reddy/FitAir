@@ -93,16 +93,18 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         ToolSpec("get_heart_rate", "Heart rate buckets (min/mean/max/n) between two epoch-ms timestamps.",
             listOf(Triple("from_ms", "integer", "Start, epoch milliseconds UTC"), Triple("to_ms", "integer", "End, epoch milliseconds UTC"),
                 Triple("bucket_s", "integer", "Bucket size in seconds (multiple of 30; heart rate is stored at 30 s resolution; 0 = raw samples, only available inside workouts)"))),
-        ToolSpec("get_workouts", "Workouts in a date range with duration, HR mean/max, 1-min HR recovery, drift and time in zones.",
+        ToolSpec("get_workouts", "Workouts in a date range with duration, HR mean/max, 1-min HR recovery, drift and time in zones. Sessions the app or the user flagged as 'not real exercise' (e.g. a scooter ride logged as cycling) are left out; each workout has a flag field.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolSpec("get_readiness", "The app's own readiness score (0-100) with components, baseline and notes for a date.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
         ToolSpec("get_baselines", "28-day baselines (resting HR, HRV, sleep) with standard deviations.", emptyList()),
-        ToolSpec("get_daily_metrics", "The app's own stored daily metrics per date: sleep_score (with components, need and sleep debt), readiness (with full breakdown), TRIMP load, acute/chronic load, ACWR, resting HR, HRV, sleep minutes, steps and insights.",
+        ToolSpec("get_daily_metrics", "The app's own stored daily metrics per date: sleep_score (with components, need and sleep debt), readiness (with full breakdown), load_trimp (old per-workout TRIMP, information only), acute/chronic load and acwr (from the whole-day cardio load), resting HR, HRV, sleep minutes, steps and insights.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolSpec("get_insights", "Rule-based insights (info/watch/alert) for one date, e.g. elevated resting HR, low HRV, sleep debt, load spikes.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
-        ToolSpec("get_load", "Daily training load: TRIMP, acute (7-day EWMA), chronic (28-day EWMA) and ACWR for a date range.",
+        ToolSpec("get_load", "Daily cardio load for a date range: cardio (whole-day, heart-rate based, counts all effort not only workouts), minutes in light/moderate/vigorous/peak zones, coverage (share of waking hours with heart rate), acute (7-day EWMA), chronic (28-day EWMA), acwr (acute/chronic; 0.8-1.3 is normal) and exercise_trimp (old per-workout figure).",
+            listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
+        ToolSpec("get_water", "Water the user logged (by tapping, not measured): per date total ml, number of entries, and the daily goal in ml. Use it for questions such as whether he drinks less on shift days.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
         ToolSpec("get_agenda", "The user's calendar for one date: events (start/end local ISO, title, all_day, busy) and free_gaps (from/to, minutes) of 45+ min between 07:00 and 22:00 after now. Titles may be redacted as 'Busy'. Empty if calendar access is off.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
@@ -223,7 +225,8 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
             "get_baselines" -> "looked up 28-day baselines"
             "get_daily_metrics" -> "looked up daily metrics ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_insights" -> "looked up insights for ${d(a.optString("date"))}"
-            "get_load" -> "looked up training load ${d(a.optString("from"))} to ${d(a.optString("to"))}"
+            "get_load" -> "looked up cardio load ${d(a.optString("from"))} to ${d(a.optString("to"))}"
+            "get_water" -> "looked up water ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_agenda" -> "looked up calendar for ${d(a.optString("date"))}"
             else -> "called $name"
         }
@@ -260,6 +263,18 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         return JSONObject().put("date", day.toString()).put("events", events).put("free_gaps", gaps)
     }
 
+    private fun water(fromS: String, toS: String): JSONObject {
+        val from = try { LocalDate.parse(fromS) } catch (e: Exception) { throw org.json.JSONException("from must be YYYY-MM-DD") }
+        val to = try { LocalDate.parse(toS) } catch (e: Exception) { throw org.json.JSONException("to must be YYYY-MM-DD") }
+        if (to < from || to.toEpochDay() - from.toEpochDay() > 120) throw org.json.JSONException("range must be 0..120 days and from <= to")
+        val days = JSONArray()
+        com.fitair.app.data.dao.WaterDao.dailyTotals(ctx, from, to, zone).forEach { (d, v) ->
+            days.put(JSONObject().put("date", d).put("ml", v.first).put("entries", v.second))
+        }
+        return JSONObject().put("days", days).put("goal_ml", com.fitair.app.data.dao.WaterDao.baseGoalMl(ctx))
+            .put("note", "days without entries are omitted; the band cannot see drinking, totals are what the user tapped")
+    }
+
     /** Runs a tool; never throws except cancellation. Returns the (<= 3k chars) result JSON string. */
     private suspend fun runTool(name: String, args: JSONObject): String {
         val t = System.currentTimeMillis()
@@ -267,6 +282,11 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         return try {
             if (name == "get_agenda") {
                 val out = compact(agenda(args.getString("date")))
+                AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
+                return out
+            }
+            if (name == "get_water") {
+                val out = compact(water(args.getString("from"), args.getString("to")))
                 AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
                 return out
             }
