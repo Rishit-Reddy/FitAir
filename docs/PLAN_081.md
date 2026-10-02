@@ -91,8 +91,8 @@ It is a training-stress estimate, not calories and not fitness.
   so we cannot tell arm gestures from walking.
 - **Possible but not worth it:** flagging minutes with steps > 40 while HR ≤ rest + 5. There is no ground truth to validate
   it, and it would add a third step number next to Google's.
-- **Decision: de-emphasise.** Steps leave Today in 0.8.1. The Vitals row becomes HRV · Resting HR (Morning only), and load
-  takes the slot steps had. Steps stay available to the coach and the Data probe.
+- **Decision (amended by 7.2):** no steps during the day. They appear only in the Evening Day summary card. The Vitals row
+  becomes HRV · Resting HR (Morning only), and steps stay available to the coach.
 - **Sitting nudge: skip.** (a) The Air → Google Health → HC path lags 15–60+ min, so "you've sat 50 min" arrives after he
   has already moved. (b) WorkManager runs at most every 15 min. (c) On the scooter, steps are ~0 for hours while he is
   working, so every shift would trigger false nudges. If the Air or Google Health offers on-band move reminders, they use
@@ -139,22 +139,21 @@ It is a training-stress estimate, not calories and not fitness.
   2024.12.01). Fallback if it clashes: a custom 7-column month grid with ‹ › buttons (no swipe).
 
 ### 3.5 Time-of-day adaptive Today (request 4) — **0.8.1**
-Pure `ui/today/TodayMode.kt`: `fun todayMode(now: LocalDateTime, wake: LocalDateTime?, usualBed: LocalTime): Mode`.
-- `wake` = end of the main sleep that ended today (the `sleep` table, same query as TodayVm). `usualBed` = 28-day median
-  sleep onset, default 23:00.
-- **Morning:** `wake != null && now < min(wake + 3 h, 12:00)`, or `wake == null && 04:00 ≤ now < 10:00` (sleep not synced
-  yet: the card says "Last night isn't synced yet").
+Pure `ui/today/TodayMode.kt`: `fun todayMode(now: LocalDateTime, w: WakeInfo): Mode`. Wake detection is in 7.1.
+- **Morning:** `now < max(min(wake + 3 h, 12:00), wake + 1 h)`; with no wake yet and `now < 10:00` → Morning, "waiting" state (7.1).
 - **Evening:** `now ≥ max(18:00, usualBed − 3 h)`, or `now < 04:00`.
 - **Day:** otherwise.
 
-| Morning | Day | Evening |
+| Morning | Day | Evening (amended, 7.2) |
 |---|---|---|
-| Readiness (full: number, verdict, driver) | Next up | Tomorrow (first 3 events + first start) |
-| Sleep card (full) | Agenda (rest of today) | Load today (final-ish) + week verdict |
-| Vitals: HRV · Resting HR (plain) | Readiness compact (number · verdict · "heart rate now 84 · resting 56") | Wind-down line |
-| Body (weight, from 0.8.2) | Load so far | Agenda (what is left today, if any) |
-| Agenda (today) · Water | Water (right after Next up) · Sleep line (collapsed) | Water (until the window ends) · Readiness compact · Sleep line |
-| Insights | Insights | Insights |
+| Readiness (full: number, verdict, driver) | Next up | **Day summary card** (numbers + plain text) |
+| Sleep card (full) | Water | **Tomorrow** (next-day events + first start) |
+| Vitals: HRV · Resting HR (plain) | Agenda (rest of today) | Water (until the window ends) |
+| Body (weight, from 0.8.2) | Readiness compact (number · verdict · "heart rate now 84 · resting 56") | Wind-down line |
+| Agenda (today) · Water | Load so far · Sleep line (collapsed) | Agenda (what is left today, if any) |
+| Insights | Insights | Insights (load/debt only) |
+
+In Evening there is no readiness, sleep, HRV or resting HR; they belong to the morning. Steps appear only in the Day summary card.
 
 - **Wind-down line** (a computed fact, not a plan): "For your usual 7h 30m, be in bed by 23:15". Bed time = usual wake −
   need − 15 min, and 30 min earlier when debt ≥ 60 min ("you're short on sleep"). Nothing else is suggested.
@@ -162,7 +161,7 @@ Pure `ui/today/TodayMode.kt`: `fun todayMode(now: LocalDateTime, wake: LocalDate
   `rememberSaveable` keyed by mode and resets when the mode changes. Readiness compact expands to full the same way.
 - **Transitions:** the mode is recomputed on resume, on pull-to-refresh and on load, **never while he is looking at the
   screen** (no reshuffle under his thumb). No animation beyond the existing 150 ms fade.
-- **Mechanism:** extend `TodayBlock` with `NextUp, AgendaRest, ReadinessCompact, Load, SleepLine, Tomorrow, WindDown`
+- **Mechanism:** extend `TodayBlock` with `NextUp, AgendaRest, ReadinessCompact, Load, SleepLine, Tomorrow, WindDown, Water, DaySummary`
   (`Body` comes in 0.8.2). `todayBlocks(ui, mode, expanded)` returns the list; tests are table-driven per mode.
 - **Header:** date · "data to 14:05" (newest `hr_30s` bucket, so he sees the band's lag, not just our sync time) · gear.
 
@@ -320,6 +319,8 @@ CREATE TABLE chat_turn(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT
   text TEXT, answer_json TEXT, trace TEXT, long INTEGER, truncated INTEGER);
 CREATE INDEX idx_chat_turn_session ON chat_turn(session_id, id);
 CREATE TABLE water(t INTEGER NOT NULL, ml REAL NOT NULL, origin TEXT NOT NULL, hc_id TEXT, PRIMARY KEY(t, origin));
+CREATE TABLE day_summary(date TEXT PRIMARY KEY, facts_json TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL,
+  model TEXT, created_ms INTEGER NOT NULL);   -- 7.2
 ```
 Prefs (existing `pref` table): `hr_max`, `birth_year`, `calendar_write_id`, `weight_start_date`, `weight_goal_kg`,
 `water_on`, `water_interval_min`, `water_goal_ml`, `water_glass_ml`, `water_quiet_events`.
@@ -329,7 +330,7 @@ Prefs (existing `pref` table): `hr_max`, `birth_year`, `calendar_write_id`, `wei
 
 | Release | Content | Size | Risk |
 |---|---|---|---|
-| **0.8.1** | Icons + tab set + gear; Copy layer; ScoreBar removed + readiness meaning; adaptive Today; Next up + Calendar tab (insert intent); cardio load v1 + session flags + readiness v3; steps off Today; "data to" header; **water reminders + one-tap logging**; schema v4 | L (two agents, ~2–3 days) | readiness values shift (v3); mode thresholds may feel off; OEM battery kills alarms |
+| **0.8.1** | Icons + tab set + gear; Copy layer; ScoreBar removed + readiness meaning; adaptive Today; Next up + Calendar tab (insert intent); cardio load v1 + session flags + readiness v3; steps off Today; "data to" header; **water reminders + one-tap logging**; 7.1–7.5 (wake, Day summary, ICS diagnostics, post-restore rebuild, stage bar); schema v4 | L (two agents, ~2–3 days) | readiness values shift (v3); mode thresholds may feel off; OEM battery kills alarms |
 | 0.8.2 | Weight (HC read/write, Body card, Weight screen, Log entry, coach tool) + chat sessions | M + M | HC may not carry Google Health weight (probe in 0.8.1 tells us) |
 | 0.8.3 | Calendar write (add/edit/delete, reminders) + week/month view (kizitonwose) | L | provider edge cases (all-day UTC, organizer rules); library version clash |
 | 0.8.4 | Glance widget | M | update delays; widget theming |
@@ -357,41 +358,63 @@ Prefs (existing `pref` table): `hr_max`, `birth_year`, `calendar_write_id`, `wei
   "Open in Google Calendar".
 - 0.8.4: the widget changes within 15 min of a calendar edit and never shows steps.
 
-## 6. Implementation split for 0.8.1 (no shared files)
-**Agent A: load analytics + data.** Owns `LocalStore.kt` (v4, `APP_TABLES`), `DailyMetrics.kt`, `LocalApi.kt` (HRmax from pref,
-load driver uses `load_day`, workouts carry `flag`), `analytics/ReadinessMath.kt` (VERSION 3), **new** `analytics/CardioLoad.kt`
-(pure: buckets → zones/load/hourly/coverage, EWMA, HRmax estimate), **new** `analytics/SessionCheck.kt` (pure), **new**
-`data/dao/LoadDao.kt`, **new** `ui/load/LoadScreen.kt` + `LoadVm.kt`, `Coach.kt` (tool descriptions for load/workouts and
-flags, `get_water`), `backup/BackupFiles.kt`, `HealthRepo.kt` (`HealthPerms.optional`, hydration read/write, probe rows
-Weight + Hydration), `Sync.kt` (hydration type, flush pending writes), `AndroidManifest.xml`, **new** `notify/WaterSchedule.kt`
-(pure next-fire logic), `notify/WaterAlarm.kt` (AlarmManager + receivers for fire, actions, boot), `data/dao/WaterDao.kt`,
-`ui/settings/WaterSection.kt` + one line in `SettingsScreen.kt`, tests `CardioLoadTest`, `SessionCheckTest`, `ReadinessMathTest`,
-`WaterScheduleTest` (window edges, restart after log, behind-pace 60 min, no fire outside window, interval bounds).
-**Agent B: UI, copy, navigation.** Owns `MainActivity.kt` (tabs, icons, gear → Settings dest, Calendar tab, `TodayDest.Load`
-route), **new** `ui/theme/NavIcons.kt`, **new** `ui/copy/Copy.kt`, **new** `ui/today/TodayMode.kt`, `ui/today/TodayVm.kt`,
-`ui/today/TodayScreen.kt`, `ui/components/Today.kt`, `ui/components/BreakdownSheet.kt`, **new**
-`ui/components/ExplainSheet.kt`, `ui/components/Planning.kt`, `ui/agenda/*`, `ui/sleep/*`, `ui/trends/*`, `analytics/ReadinessView.kt`,
-`core/Format.kt`, `app/build.gradle.kts` (versionCode 16, "0.8.1"), `docs/ARCHITECTURE.md` (2.1, 2.2 and 1.3 rows only), tests
-`CopyTest`, `TodayModeTest`, `TodayBlocksTest`, `FormatTest`.
-**Day-1 frozen contracts (commit first, then build in parallel):**
-- A1: `class LoadToday(val soFar: Double?, val typicalByNow: Double?, val ratio: Double?, val coverage: Double?, val partial: Boolean)`;
-  `object LoadDao { fun today(ctx: Context): LoadToday }`; `@Composable fun LoadScreen(onBack: () -> Unit)`;
-  `class WaterToday(val ml: Int, val goalMl: Int, val extraMl: Int, val pace: Pace /*OnPace|Behind|Done*/, val remindersOn: Boolean)`;
-  `object WaterDao { fun today(ctx): WaterToday; fun add(ctx, ml: Int): Long; fun undo(ctx, t: Long) }`;
-  `object WaterAlarm { fun enable(ctx); fun reschedule(ctx) }` (B calls `add` + `reschedule` from the Today buttons).
-- B1: `object Copy { readiness(score: Int?): Verdict; driver(key: String, score: Double, value: Double?, usual: Double?): Verdict;
-  load(ratio: Double?): Verdict; insight(id: String, fallback: String): String; explain(key: String): String }`, with
-  `class Verdict(val headline: String, val detail: String?, val tone: Tone)`. A's LoadScreen uses only these.
-- B adds `TodayDest.Load` and the route. A must not touch `ui/today/*`, `ui/components/*` or `MainActivity.kt`; B must not
-  touch `DailyMetrics`, `LocalApi`, `LocalStore` or anything under `analytics/` except `ReadinessView`.
-**Verification:** `./gradlew testDebugUnitTest` green. Table-driven tests: CardioLoad (a resting day ≈ 0; a 30-min block at
-70 % HRR gives the expected Banister sum; a 90 s spike gives 0; coverage; HRmax priority pref > age > observed), SessionCheck
-(scooter at rest + 8 bpm flagged; a real ride not flagged; user verdict beats auto), TodayMode (the edges at wake+3 h, 12:00,
-18:00, bed−3 h, 04:00, no wake), Copy (each band edge; no forbidden token in any primary string).
+## 6. Implementation split for 0.8.1 (no shared files; covers 3.x **and** the section 7 amendments)
+**Order.** Day 1: **A1** (schema v4 incl. `day_summary` + every contract stub below, compiling) and **B1** (`Copy` skeleton,
+`TodayBlock`/`TodayDest` enums) land first; both rebase on them. Then build in parallel. A's `Rebuild` runs after CardioLoad
+exists (it rebuilds `load_day` too). B does the version bump and the final ARCHITECTURE.md rows after both merge.
+**Agent A: data, analytics, background, settings.**
+- **Storage and analytics:** `LocalStore.kt` (v4, `APP_TABLES`); `DailyMetrics.kt` (+ `rebuildAll`); `LocalApi.kt` (HRmax
+  from pref, load driver from `load_day`, workouts carry `flag`); `analytics/ReadinessMath.kt` (VERSION 3);
+  `analytics/SelfCheck.kt` (+ check 9, 7.4); **new** `analytics/CardioLoad.kt` and `analytics/SessionCheck.kt` (pure).
+- **DAOs and helpers (new):** `data/dao/LoadDao.kt`, `data/dao/WaterDao.kt`, `data/dao/WakeDao.kt` (7.1), `data/Rebuild.kt`.
+- **Load screen (new):** `ui/load/LoadScreen.kt` + `LoadVm.kt`.
+- **Coach:** `Coach.kt` (tool texts, `get_water`) and **new** `coach/DaySummary.kt` (facts, prompt, validator, cache).
+- **Backup:** `backup/BackupFiles.kt` (`merge` returns per-table counts) and `DriveBackup.kt` (rebuild after restore, notice).
+- **Health Connect, sync, notifications:** `HealthRepo.kt` (`HealthPerms.optional`, hydration, probe rows); `Sync.kt`;
+  `AndroidManifest.xml`; **new** `notify/WaterSchedule.kt` (pure) and `notify/WaterAlarm.kt`.
+- **Calendar:** `integrations/calendar/*` (`CalendarInfo.syncing`, `unsyncedSelected()`).
+- **Settings:** `ui/settings/*` (new `WaterSection`, `CalendarSection` sync marks, Diagnostics "Rebuild analytics").
+- **Tests:** `CardioLoadTest`, `SessionCheckTest`, `ReadinessMathTest`, `WaterScheduleTest`, `WakeTest` (7.1 cases),
+  `DaySummaryTest` (validator rejects invented numbers; fallback on error).
+**Agent B: UI, copy, navigation.**
+- **Navigation:** `MainActivity.kt` (tabs, icons, gear → Settings, Calendar tab, `TodayDest.Load`) and **new**
+  `ui/theme/NavIcons.kt`.
+- **Copy:** **new** `ui/copy/Copy.kt` (incl. the `daySummary` template).
+- **Today:** **new** `ui/today/TodayMode.kt`, `TodayVm.kt` (sync-on-open, modes) and `TodayScreen.kt`.
+- **Components:** `ui/components/Today.kt`, **new** `DaySummaryCard.kt`, `SleepViz.kt` (7.5), `BreakdownSheet.kt`,
+  **new** `ExplainSheet.kt`, `Planning.kt`.
+- **Screens:** `ui/agenda/*` (Next up, diagnostic line), `ui/sleep/*`, `ui/trends/*`.
+- **Other:** `analytics/ReadinessView.kt`, `core/Format.kt`, `app/build.gradle.kts` (versionCode 16, "0.8.1") and
+  `docs/ARCHITECTURE.md` (2.1, 2.2, 1.3 rows).
+- **Tests:** `CopyTest`, `TodayModeTest`, `TodayBlocksTest` (evening has no sleep/HRV/RHR/steps outside the card),
+  `FormatTest`, `StageLabelTest` (7.5).
+**Frozen contracts (A1 unless marked B1):**
+- `class LoadToday(soFar, typicalByNow, ratio, coverage: Double?, partial: Boolean)`; `LoadDao.today(ctx)`;
+  `@Composable LoadScreen(onBack)`.
+- `class WaterToday(ml, goalMl, extraMl: Int, pace: Pace, remindersOn: Boolean)`; `WaterDao.today/add(ctx, ml): Long/undo(ctx, t)`;
+  `WaterAlarm.enable/reschedule(ctx)`.
+- `class WakeInfo(wakeMs: Long?, lastKnownWakeMs: Long?, usualWakeMin: Int, usualBedMin: Int, waiting: Boolean)`;
+  `WakeDao.get(ctx, nowMs)`.
+- `class DayFacts(date, steps, distanceM, cardio, zoneMin, waterMl, waterGoalMl, rhr, hrAvg, hrMax, workouts: List<String>, partial)`;
+  `DaySummary.facts(ctx, date)`; `suspend DaySummary.text(ctx, date, regenerate: Boolean): SummaryText(text, source /*llm|template*/, createdMs)`.
+- `CalendarRepo.unsyncedSelected(): List<CalendarInfo>`; `Rebuild.state: StateFlow<RebuildState>`, `Rebuild.start(ctx)`.
+- B1: `Copy.readiness/driver/load/insight/explain` (as before), `Copy.daySummary(f: DayFacts): String`,
+  `class Verdict(headline, detail, tone)`.
+- Boundaries: A never touches `ui/today/*`, `ui/components/*`, `ui/agenda/*` or `MainActivity.kt`. B never touches
+  `ui/settings/*`, `data/*`, `notify/*`, `integrations/*`, `backup/*`, `DriveBackup`, `DailyMetrics`, `LocalApi`, `LocalStore`,
+  or `analytics/*` except `ReadinessView`.
+**Verification:** `./gradlew testDebugUnitTest` green, with table-driven tests:
+- **CardioLoad:** a resting day ≈ 0; a 30-min block at 70 % HRR gives the expected Banister sum; a 90 s spike gives 0;
+  coverage; HRmax priority.
+- **SessionCheck:** a scooter ride at rest + 8 bpm is flagged; the user's verdict wins.
+- **TodayMode:** the edges.
+- **Copy:** the band edges; no forbidden token.
+- **WakeTest:** a nap is ignored; a split night; no session yet.
+- **Stage labels:** contrast ≥ 4.5 and the fit rule.
 
 ---
 
-## Decisions I need from you
+## Decisions I need from you (all defaults accepted 2026-10-02, see 7)
 1. **Tabs:** Today · Calendar · Coach · Log, with Settings behind a gear on Today. *Default: yes.*
 2. **Readiness v3:** readiness uses the whole-day cardio load instead of detected workouts, and the last 120 days are
    recomputed (numbers will shift a little). *Default: yes.*
@@ -411,3 +434,123 @@ route), **new** `ui/theme/NavIcons.kt`, **new** `ui/copy/Copy.kt`, **new** `ui/t
    18:00). *Default: as stated.*
 10. **Order after 0.8.1:** weight + chat sessions → calendar editing + month view → widget → morning brief; the planned
     Train/Cook suggestion cards are dropped. *Default: yes.*
+
+---
+
+## 7. Addendum (user review, 2026-10-02)
+All 10 defaults below are **accepted**. No birth year was given, so HRmax is estimated (3.1) and editable on the Load screen.
+Sections 3.5 and 6 are amended in place; this section holds the detail.
+
+### 7.1 How the app knows he woke up
+- **Source:** the band records sleep → Google Health syncs it to Health Connect → our sync copies it to `sleep`. Wake time
+  is therefore known only after **both** syncs have run. Typically that is 15–60 min after he gets up, sometimes longer.
+- **Sync on open:** when Today resumes and the last sync is more than 5 min old, `TodayVm` starts a sync and renders from the
+  DB straight away. If that sync finishes within 30 s and he hasn't touched the screen, the mode is computed once more; after
+  that, it doesn't change while he is looking (3.5).
+- **Algorithm** (`WakeDao.get`, logic pure and tested):
+  1. Take sleep sessions with `end_ms ∈ [now − 18 h, now]` and a duration of **≥ 90 min**. Shorter ones are naps and are
+     ignored for the mode.
+  2. The main session is the longest one; `wake` = its end.
+  3. If another ≥ 90 min session ends later (split night, back to bed), `wake` = that later end.
+  4. `usualWake` and `usualBed` = 28-day medians of the main-session end and start (defaults 07:00 / 23:00).
+- **Fallbacks:**
+  - No session yet and `now < 10:00` → Morning with `waiting = true`. The Sleep card shows a quiet "Waiting for your sleep
+    data · synced 06:58" line. Readiness shows "—" with "after your sleep syncs". Morning lasts until yesterday's wake clock
+    time + 3 h (`lastKnownWakeMs`).
+  - No session and `now ≥ 10:00` → Day mode, with the line "No sleep recorded last night" (band off or not synced).
+- **What uses `wake`:** the end of Morning (3.5), the start of the water window (wake + 30 min), and later the morning brief.
+  `usualBed` drives Evening and the wind-down line.
+
+### 7.2 Evening "Day summary" card (steps return, only here)
+- **Card:** the first block in Evening. Caption "TODAY SO FAR", then a 2-column fact grid:
+  - steps (`Format.compactCount`), distance (km)
+  - cardio load + vigorous/peak minutes, water "2.1 of 2.5 L"
+  - heart rate "resting 56 · avg 74 · max 152"
+  - workouts that aren't flagged ("Pickleball 1h 10m")
+  Under the grid, **2–3 sentences** of plain text and a quiet "Regenerate" text button. Tapping the card opens Load. Steps
+  appear nowhere else on Today or in the trends.
+- **Facts:** `DaySummary.facts` computes everything from the DB. The model receives **only** this JSON (plus the goal and
+  "usual" values) and never sees raw series.
+- **LLM call:**
+  - **When:** one call per evening, the first time Evening Today opens with a key and a network. It is cached in
+    `day_summary(date PK, facts_json, text, source, model, created_ms)` (added to the v4 schema) and regenerated **only**
+    when he taps Regenerate.
+  - **Budget:** Flash-Lite class, thinking off, ≤ 700 input tokens, `maxOutputTokens` 120, strict JSON `{"text": "..."}`,
+    ≤ 60 words, 8 s timeout.
+  - **Logging:** each call is logged in `ai_call` with task `day_summary`.
+- **Never invents numbers:** a validator extracts every number in the text, and each must match a facts value (after
+  rounding or unit formatting). On any mismatch, or on a schema error or timeout, the deterministic template
+  `Copy.daySummary(facts)` is used instead (e.g. "A steady working day: load about usual, water nearly there. An early
+  night would help tomorrow.") with a small "rules" tag. The same template is used offline and without a key.
+- **Tone rules (in the prompt and in Copy):**
+  - Lead with something that went well; offer at most one "you could have…" and only if the facts support it.
+  - Compare with his own usual values, never with norms.
+  - No guilt, no exclamation marks, no medical claims or diagnoses, no new plans for tomorrow beyond one sentence.
+- **States:**
+  - **Loading:** the numbers render immediately; the text area is a fixed-height dim "Writing summary…" line.
+  - **No data synced today:** "Not enough data from today yet", with no text.
+  - **Partial coverage:** the facts get a "partial day" note.
+  - **Failure:** the template text, with no error shown, only a log line.
+- **Tomorrow block** comes right after the card: tomorrow's events (up to 4) and "First event 08:00". If there are none:
+  "Nothing scheduled tomorrow". Without calendar permission: the existing "Show my calendar" line.
+
+### 7.3 Bug: URL-subscribed (ICS) calendar is ticked but shows no events
+- **Likely cause:** the picker lists every calendar (`queryCalendars(onlyVisibleSynced = false)`) but drops the
+  visible/synced flag. Subscribed calendars are often `SYNC_EVENTS = 0` on the phone, so the provider holds no instances
+  for them.
+- **Fix in 0.8.1:**
+  - `CalendarInfo.syncing` (VISIBLE && SYNC_EVENTS).
+  - In Settings > Calendars, a non-syncing calendar row gets a dim "Not synced to this phone" note and a "How to turn on"
+    button. The button opens the Google Calendar app (launch intent for `com.google.android.calendar`) with the hint
+    "Settings › <calendar name> › Sync".
+  - The Agenda (Today and the Calendar tab) shows a diagnostic line when any selected calendar is not syncing or has
+    0 instances in ±30 days: "1 selected calendar has no events on this phone ›" (opens Settings > Calendars).
+- **Note for him:** Google refreshes URL-subscribed calendars on its servers only every few hours (sometimes up to a day),
+  so new ICS events arrive late even when sync is on.
+- Flipping `SYNC_EVENTS` from FitAir needs `WRITE_CALENDAR` and is **deferred to 0.8.3**.
+
+### 7.4 Bug: after a restore on a second device, Sleep history shows only 2 days
+- **Suspected cause (unconfirmed):** `DailyMetrics` computed rows on the new phone **before** the restore, when sleep data
+  was missing. Rows older than 2 days are frozen, so they are never recomputed after the merge, and the merge does not
+  rebuild analytics.
+- **Fix in 0.8.1 (backup format unchanged):**
+  - When a restore completes, `Rebuild.start` runs in the background on `DriveBackup`'s process scope. It does a forced
+    recompute (`computeDates(force = true)`, 30-day chunks) of `daily_metrics` **and** `load_day` for every date from the
+    earliest `sleep`/`hr_30s`/`steps` row to today.
+  - Progress shows in the backup block ("Rebuilding analytics 40 %"). It writes the log line `rebuild: N days in X ms`.
+- **Settings > Diagnostics:** a "Rebuild analytics" button (same job, with progress), and self-check 9: "every date with a
+  main sleep has `daily_metrics.sleep_min`" (fail lists the first 3 dates). This confirms or refutes the cause on his phone.
+- **Restore notice:** per-table row counts ("Restored 2 files: sleep 412 · hr_30s 98,210 · daily_metrics 40 · …").
+  `BackupFiles.merge` returns `Map<String, Long>`.
+
+### 7.5 Bigger sleep-stage bar with in-bar minutes
+- **Bar:** `StageBar` height becomes **32dp** on the Sleep screen and **28dp** on the Today card. Full width, 6dp corners,
+  1dp gaps as before.
+- **Labels:** each segment's minutes are drawn inside it with `drawText` (labelSmall 11sp, Medium).
+- **Fit rule** (pure `StageLabel.fit(segmentPx, longPx, shortPx, padPx)`, measured with `TextMeasurer`):
+  1. Show the long form "1h 05" if `longPx + 2 × 4dp ≤ segmentPx`.
+  2. Otherwise show the short form "65m" if it fits by the same rule.
+  3. Otherwise show no label.
+  Labels are vertically centred and never extend past the segment, so they cannot clip or overlap.
+- **Legend:** the 4-column legend (dot, stage name, "1h 05m · 23 %") is **always** shown on the Sleep screen. On the Today
+  card a one-line compact legend (dot + name + minutes) is always shown too, so a hidden in-bar label never loses information.
+- **Contrast:** the label ink is chosen per segment colour as whichever of `#FFFFFF` and `#161616` has the higher WCAG
+  contrast, computed in code.
+  - **Light theme:** Awake #D2691E → dark ink (≈ 5.0); Light #3D8BC9 → dark (≈ 5.0); REM #7A4FC9 → white (≈ 5.5);
+    Deep #24307F → white (≈ 11).
+  - **Dark theme:** Awake, Light and REM → dark ink (≥ 7); Deep #6A7CF0 → dark (≈ 5.0).
+  `StageLabelTest` asserts ≥ 4.5 for all 8 colours.
+- **Owner:** Agent B (`ui/components/SleepViz.kt`, `core/Format.kt` for "1h 05").
+- **Acceptance:** on the Pixel, in both themes and folded/unfolded, every visible in-bar label is fully inside its segment
+  and readable. A 6-minute awake sliver shows no label but appears in the legend. Nothing overlaps at font scale 1.3.
+
+### 7.6 Extra phone acceptance checks
+- **Open at 07:30 before the band has synced:** Morning appears with "Waiting for your sleep data". About an hour later the
+  Sleep card is filled. A 40-min afternoon nap does not switch Today back to Morning.
+- **At 20:00:** the Day summary comes first, with steps, water and heart rate, followed by Tomorrow. There is no sleep, HRV
+  or resting-HR block. The text quotes only numbers shown in the grid. In airplane mode, a template sentence appears.
+  Regenerate changes the text; reopening the app does not.
+- **ICS calendar:** it shows "Not synced to this phone". "How to turn on" opens Google Calendar. After you enable sync, its
+  events appear in the Agenda (allow hours for Google's refresh).
+- **Second device:** after a restore, the notice lists row counts, the rebuild progress reaches 100 %, Sleep → 30 d shows
+  every night since 20 Sep, and self-check 9 passes. "Rebuild analytics" in Diagnostics re-runs it.
