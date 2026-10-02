@@ -1,5 +1,6 @@
 package com.fitair.app.ui.components
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,11 +24,24 @@ import com.fitair.app.ui.theme.Type
 
 /** Scrolling column with the page gutter. */
 @Composable
-fun Page(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun Page(
+    modifier: Modifier = Modifier,
+    scrollState: ScrollState = rememberScrollState(),
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Spacing.gutter, vertical = Spacing.xl),
+        modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = Spacing.gutter, vertical = Spacing.xl),
         content = content,
     )
+}
+
+/** Fixed (non-scrolling) header for detail screens: Back on the left, title centred. */
+@Composable
+fun DetailHeader(title: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = Spacing.s), contentAlignment = Alignment.Center) {
+        TextButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) { Text("Back", style = Type.label) }
+        Text(title, style = MaterialTheme.typography.titleMedium)
+    }
 }
 
 @Composable

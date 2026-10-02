@@ -34,7 +34,7 @@ import java.util.Locale
 
 private val LEFT = 30.dp      // y label gutter
 private val BOTTOM = 18.dp    // x label gutter
-private val DEFAULT_HEIGHT = 140.dp
+private val DEFAULT_HEIGHT = 160.dp
 
 /** Indices of the x labels to show: first, last and evenly spaced ones in between, at most [count]. */
 internal fun labelIndices(n: Int, count: Int = 4): List<Int> {
@@ -106,7 +106,6 @@ fun BarChart(
     selectedIndex: Int? = null,
     onSelect: (Int) -> Unit = {},
     baseline: Float? = null,
-    barColors: List<Color>? = null,
     xLabels: List<String> = emptyList(),
 ) {
     val cs = MaterialTheme.colorScheme
@@ -134,11 +133,10 @@ fun BarChart(
         }
         values.forEachIndexed { i, v ->
             if (v == null) return@forEachIndexed
-            val base = barColors?.getOrNull(i) ?: primary
-            val a = if (selectedIndex == null || selectedIndex == i) 1f else 0.62f
+            val base = if (selectedIndex == i) primary else dim
             val x = left + slot * i + (slot - bw) / 2f
             val yt = y(v).coerceAtMost(bottom - 1.dp.toPx())
-            drawRoundRect(base.copy(alpha = a), Offset(x, yt), Size(bw, bottom - yt), androidx.compose.ui.geometry.CornerRadius(minOf(2.dp.toPx(), bw / 2f)))
+            drawRoundRect(base, Offset(x, yt), Size(bw, bottom - yt), androidx.compose.ui.geometry.CornerRadius(minOf(2.dp.toPx(), bw / 2f)))
         }
         baseline?.let {
             val yb = y(it)
@@ -156,6 +154,7 @@ fun LineChart(
     onSelect: (Int) -> Unit = {},
     band: Pair<Float, Float>? = null,
     xLabels: List<String> = emptyList(),
+    latestTone: Color? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
@@ -182,7 +181,7 @@ fun LineChart(
         yLabel(measurer, fmt(hi - pad), dim, y(hi - pad), left)
         yLabel(measurer, fmt(lo + pad), dim, y(lo + pad), left)
         band?.let { (a, b) ->
-            drawRect(primary.copy(alpha = 0.10f), Offset(left, y(b)), Size(plotW, (y(a) - y(b)).coerceAtLeast(1f)))
+            drawRect(cs.onSurface.copy(alpha = 0.06f), Offset(left, y(b)), Size(plotW, (y(a) - y(b)).coerceAtLeast(1f)))
         }
         selectedIndex?.takeIf { it in 0 until n }?.let { i ->
             drawRect(primary.copy(alpha = 0.10f), Offset(left + slot * i, top), Size(slot, bottom - top))
@@ -190,7 +189,7 @@ fun LineChart(
         val stroke = Stroke(2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
         var path = Path(); var run = 0
         fun flush() {
-            if (run == 1) { /* single point drawn as a dot below */ } else if (run > 1) drawPath(path, primary, style = stroke)
+            if (run == 1) { /* single point drawn as a dot below */ } else if (run > 1) drawPath(path, dim, style = stroke)
             path = Path(); run = 0
         }
         values.forEachIndexed { i, v ->
@@ -199,9 +198,13 @@ fun LineChart(
             run++
             val prevNull = i == 0 || values[i - 1] == null
             val nextNull = i == n - 1 || values[i + 1] == null
-            if (prevNull && nextNull) drawCircle(primary, 2.5.dp.toPx(), Offset(x(i), y(v)))
+            if (prevNull && nextNull) drawCircle(dim, 2.5.dp.toPx(), Offset(x(i), y(v)))
         }
         flush()
+        if (latestTone != null) {
+            val li = values.indexOfLast { it != null }
+            if (li >= 0) drawCircle(latestTone, 4.dp.toPx(), Offset(x(li), y(values[li]!!)))
+        }
         selectedIndex?.takeIf { it in 0 until n }?.let { i ->
             values[i]?.let { v -> drawCircle(primary, 4.dp.toPx(), Offset(x(i), y(v))); drawCircle(cs.background, 1.8.dp.toPx(), Offset(x(i), y(v))) }
         }

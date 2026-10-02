@@ -7,6 +7,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -20,7 +21,7 @@ import com.fitair.app.ui.theme.Type
 /** How the readiness number was made: up to 5 components, weights that add up to 100 %, and the version. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BreakdownSheet(view: ReadinessView, onDismiss: () -> Unit) {
+fun BreakdownSheet(view: ReadinessView, onDismiss: () -> Unit, onTrend: (() -> Unit)? = null) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -65,6 +66,10 @@ fun BreakdownSheet(view: ReadinessView, onDismiss: () -> Unit) {
                 view.missing.forEach { (k, why) ->
                     Text("$k: $why", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs))
                 }
+            }
+            if (onTrend != null) {
+                Spacer(Modifier.height(Spacing.l))
+                TextButton(onClick = onTrend) { Text("30-day trend \u203A", style = Type.label) }
             }
         }
     }

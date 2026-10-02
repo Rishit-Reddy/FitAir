@@ -61,7 +61,7 @@ object Motion {
 @Immutable
 class StatusColors(val good: Color, val caution: Color, val alert: Color)
 
-val LightStatus = StatusColors(good = Color(0xFF3E8E88), caution = Color(0xFFB7791F), alert = Color(0xFFB4483C))
+val LightStatus = StatusColors(good = Color(0xFF3E8E88), caution = Color(0xFFA26A14), alert = Color(0xFFB4483C))
 val DarkStatus = StatusColors(good = Color(0xFF6FB8B1), caution = Color(0xFFD9A55A), alert = Color(0xFFE07A6E))
 
 val LocalStatusColors = staticCompositionLocalOf { LightStatus }

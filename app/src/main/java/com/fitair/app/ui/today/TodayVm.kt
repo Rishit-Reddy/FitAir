@@ -26,9 +26,7 @@ import java.time.ZoneId
 
 class Vital(val label: String, val value: String, val unit: String?, val delta: String?, val tone: Tone) { var dest: TodayDest? = null }
 
-class SleepNight(
-    val asleep: String, val window: String?, val score: String?, val efficiency: String?, val deepRem: String?, val debt: String?,
-)
+class SleepNight(val window: String?, val score: String?, val debt: String?)
 
 class Insight(val title: String, val alert: Boolean)
 
@@ -95,9 +93,10 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         // Sleep: duration and delta vs the personal need
         val sleepMin = row?.takeIf { it.has("sleep_min") }?.getLong("sleep_min")
         val need = sleepJson?.optDouble("need_min", Double.NaN)?.takeIf { !it.isNaN() }
-        vitals.add(Vital("Sleep", sleepMin?.let { "${it / 60}:%02d".format(it % 60) } ?: Format.DASH, if (sleepMin != null) "h" else null,
-            if (sleepMin != null && need != null) Format.deltaMinutes(Math.round(sleepMin - need)) + " vs need" else null,
-            if (sleepMin != null && need != null) (if (sleepMin >= need - 15) Tone.Good else Tone.Caution) else Tone.Neutral))
+        val sleepDiff = if (sleepMin != null && need != null) sleepMin - need else null
+        vitals.add(Vital("Sleep", Format.duration(sleepMin), null,
+            sleepDiff?.let { (if (it < 0) "▼ " else if (it >= 15) "▲ " else "") + Format.deltaShort(Math.round(it)) + " vs need" },
+            when { sleepDiff == null -> Tone.Neutral; sleepDiff < 0 -> Tone.Caution; sleepDiff >= 15 -> Tone.Good; else -> Tone.Neutral }))
         vitals.add(vital("HRV", row, "hrv", col("hrv"), "ms", higherBetter = true, minDelta = 2.0))
         vitals.add(vital("Resting HR", row, "rhr", col("rhr"), "bpm", higherBetter = false, minDelta = 1.0))
         val steps = row?.takeIf { it.has("steps") }?.getLong("steps")
@@ -132,15 +131,10 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
                 window = "${Format.clock(a.hour, a.minute)} – ${Format.clock(b.hour, b.minute)}"
             }
         }
-        val comps = sj?.optJSONObject("components")
-        val eff = comps?.optJSONObject("efficiency")?.optDouble("efficiency", Double.NaN)?.takeIf { !it.isNaN() }
-        val dr = comps?.optJSONObject("restorative")?.optDouble("deep_rem_fraction", Double.NaN)?.takeIf { !it.isNaN() }
         val score = sj?.takeIf { !it.isNull("score") }?.optDouble("score")
         val debt = sj?.optDouble("sleep_debt_min", 0.0) ?: 0.0
         return SleepNight(
-            asleep = Format.duration(sleepMin), window = window,
-            score = score?.let { "${Math.round(it)} / 100" },
-            efficiency = eff?.let { "${Math.round(it * 100)} %" }, deepRem = dr?.let { "${Math.round(it * 100)} %" },
+            window = window, score = score?.let { "${Math.round(it)}" },
             debt = if (debt >= 60) Format.duration(Math.round(debt)) else null,
         )
     }

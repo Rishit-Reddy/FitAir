@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
@@ -50,8 +49,7 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
                 EmptyState("No data yet", "Pull down to sync from Health Connect.")
                 return@Page
             }
-            ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = { onOpen(TodayDest.Readiness) })
-            if (ui.readiness != null) TextButton(onClick = { sheet = true }) { Text("Why this score", style = Type.label) }
+            ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) })
 
             SectionBreak()
             ui.vitals.chunked(2).forEachIndexed { i, pair ->
@@ -67,15 +65,9 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
             }
 
             ui.night?.let { n ->
-                SectionBreak()
-                SectionHeader("Last night \u203A", Modifier.clickable(role = Role.Button) { onOpen(TodayDest.Sleep) }.heightIn(min = Spacing.minTouch).wrapContentHeight(Alignment.CenterVertically))
-                Spacer(Modifier.height(Spacing.xs))
-                StatRow("Asleep", n.asleep)
-                n.window?.let { StatRow("In bed", it) }
-                n.score?.let { StatRow("Sleep score", it) }
-                n.efficiency?.let { StatRow("Efficiency", it) }
-                n.deepRem?.let { StatRow("Deep + REM", it) }
-                n.debt?.let { StatRow("Sleep debt, 7 nights", it) }
+                Spacer(Modifier.height(Spacing.m))
+                val line = listOfNotNull(n.window, n.score?.let { "score $it" }, n.debt?.let { "$it debt" }).joinToString(" \u00B7 ")
+                SummaryRow("Last night", line.ifEmpty { Format.DASH }, onClick = { onOpen(TodayDest.Sleep) })
             }
 
             if (ui.insights.isNotEmpty()) {
@@ -93,5 +85,5 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
         }
     }
     val r = ui?.readiness
-    if (sheet && r != null) BreakdownSheet(r) { sheet = false }
+    if (sheet && r != null) BreakdownSheet(r, onDismiss = { sheet = false }, onTrend = { sheet = false; onOpen(TodayDest.Readiness) })
 }

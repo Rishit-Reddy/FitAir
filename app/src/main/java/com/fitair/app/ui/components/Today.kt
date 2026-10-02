@@ -10,6 +10,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.fitair.app.core.Format
 import com.fitair.app.ui.theme.LocalStatusColors
@@ -26,7 +29,7 @@ fun FreshnessPill(text: String, stale: Boolean, modifier: Modifier = Modifier) {
             .padding(horizontal = Spacing.m, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusDot(if (stale) st.caution else st.good)
+        StatusDot(if (stale) st.caution else MaterialTheme.colorScheme.outline)
         Spacer(Modifier.width(6.dp))
         Text(text, style = Type.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -68,6 +71,32 @@ fun MetricTile(label: String, value: String, unit: String?, delta: String?, tone
                 Text(unit, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 5.dp))
             }
         }
-        Text(delta ?: " ", style = Type.bodySmall, color = toneColor(tone))
+        val glyph = delta?.firstOrNull()?.takeIf { it == '▲' || it == '▼' }
+        val dim = MaterialTheme.colorScheme.onSurfaceVariant
+        if (delta == null) Text(" ", style = Type.bodySmall, color = dim)
+        else if (glyph == null) Text(delta, style = Type.bodySmall, color = dim)
+        else Text(
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = toneColor(tone))) { append(glyph) }
+                append(delta.substring(1))
+            },
+            style = Type.bodySmall, color = dim,
+        )
+    }
+}
+
+/** One full-width tappable summary row: caption, a single line of facts and a chevron. */
+@Composable
+fun SummaryRow(caption: String, line: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(role = Role.Button, onClick = onClick).heightIn(min = 56.dp).padding(horizontal = Spacing.l, vertical = Spacing.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            SectionHeader(caption)
+            Text(line, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("\u203A", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

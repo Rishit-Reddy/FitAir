@@ -27,7 +27,7 @@ private val LightScheme = lightColorScheme(
     primary = Teal, onPrimary = Color.White,
     background = Color(0xFFFAFAF9), onBackground = Color(0xFF161616),
     surface = Color(0xFFFAFAF9), onSurface = Color(0xFF161616),
-    surfaceVariant = Color(0xFFF0F0EE), onSurfaceVariant = Color(0xFF6E6E6A),
+    surfaceVariant = Color(0xFFF0F0EE), onSurfaceVariant = Color(0xFF666662),
     outlineVariant = Color(0xFFE2E2DF), outline = Color(0xFFB8B8B4),
     secondaryContainer = Color(0xFFE3EFED), onSecondaryContainer = Color(0xFF1F4E4A),
     error = LightStatus.alert, onError = Color.White,

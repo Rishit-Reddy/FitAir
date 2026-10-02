@@ -113,11 +113,11 @@ Rule: screens compose only these components and Material3 primitives. No ad-hoc 
 | background/surface | #FAFAF9 | #0F0F0F | page |
 | surfaceVariant | #F0F0EE | #1A1A1A | cards, user bubble |
 | onSurface | #161616 | #EDEDEB | text |
-| onSurfaceVariant | #6E6E6A | #8C8C88 | secondary text (light darkened for contrast at least 4.5:1) |
+| onSurfaceVariant | #666662 | #8C8C88 | secondary text (light darkened for contrast at least 4.5:1) |
 | outlineVariant | #E2E2DF | #2A2A2A | hairlines |
 | primary | #3E8E88 | #6FB8B1 | accept, selected, links |
 | good | #3E8E88 | #6FB8B1 | readiness 70 or more, positive delta (same as primary on purpose) |
-| caution | #B7791F | #D9A55A | readiness 50-69, `watch` |
+| caution | #A26A14 | #D9A55A | readiness 50-69, `watch` |
 | alert | #B4483C | #E07A6E | readiness under 50, `alert` |
 Status colours appear only as a 6dp dot or a delta arrow, **never as large fills**.
 **Motion:** standard 150 ms (fade, expand), emphasized 250 ms (sheet, card accept collapse), easing `FastOutSlowIn`. No spring bounce, no number count-up. Honour the system animator scale of 0, which disables animation.

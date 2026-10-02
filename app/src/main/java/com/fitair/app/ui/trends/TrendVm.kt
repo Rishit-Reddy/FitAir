@@ -16,8 +16,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.time.LocalDate
 
-enum class TrendMetric(val title: String, val unit: String) {
-    Readiness("Readiness", "pts"), Hrv("HRV", "ms"), RestingHr("Resting HR", "bpm"), Load("Training load", "TRIMP"),
+enum class TrendMetric(val title: String, val unit: String, val higherBetter: Boolean) {
+    Readiness("Readiness", "pts", true), Hrv("HRV", "ms", true), RestingHr("Resting HR", "bpm", false), Load("Training load", "TRIMP", false),
 }
 
 class TrendDay(

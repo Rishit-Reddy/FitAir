@@ -15,6 +15,14 @@ object Format {
         return (if (min < 0) "−" else "+") + "${a / 60}:%02d".format(a % 60)
     }
 
+    /** Short signed difference: "+32m", "−1h 05m", "0m" (true minus sign). */
+    fun deltaShort(min: Long): String {
+        if (min == 0L) return "0m"
+        val a = Math.abs(min)
+        val body = if (a >= 60) "${a / 60}h %02dm".format(a % 60) else "${a}m"
+        return (if (min < 0) "−" else "+") + body
+    }
+
     fun clock(h: Int, m: Int) = "%02d:%02d".format(h, m)
 
     /** 8234 -> "8,234". */

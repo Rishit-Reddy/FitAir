@@ -102,6 +102,13 @@ object SleepModel {
     /** 14 or 30 nights taken from the end of [all]. */
     fun lastN(all: List<Night>, n: Int): List<Night> = all.takeLast(n)
 
+    /** The latest night that has data, or null when none do. */
+    fun defaultNight(nights: List<Night>): LocalDate? = nights.lastOrNull { it.hasData }?.date
+
+    /** "Last night" for [today], otherwise e.g. "Wed 30 Sep". */
+    fun headerLabel(date: LocalDate, today: LocalDate): String =
+        if (date == today) "Last night" else date.format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM", java.util.Locale.ENGLISH))
+
     /** Short x label, e.g. "2 Oct". */
     fun xLabel(d: LocalDate): String = "${d.dayOfMonth} ${d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH)}"
 }
@@ -122,7 +129,17 @@ class SleepVm(app: Application) : AndroidViewModel(app) {
 
     init { load() }
 
-    fun chooseRange(n: Int) { range = n; selected = null; detail = null }
+    fun chooseRange(n: Int) {
+        range = n
+        val nights = (state as? SleepState.Ready)?.nights ?: return
+        val inRange = SleepModel.lastN(nights, n).any { it.date == selected }
+        if (!inRange) selectDefault()
+    }
+
+    fun selectDefault() {
+        val nights = (state as? SleepState.Ready)?.nights ?: return
+        SleepModel.defaultNight(nights)?.let { select(it) }
+    }
 
     fun load() {
         state = SleepState.Loading
@@ -133,6 +150,7 @@ class SleepVm(app: Application) : AndroidViewModel(app) {
                     SleepModel.parseNights(LocalApi.get(getApplication(), "/daily?from=$from&to=$to"), from, to)
                 }
                 state = SleepState.Ready(nights)
+                if (selected == null || nights.none { it.date == selected }) selectDefault()
             } catch (e: Exception) {
                 AppLog.e("Sleep load failed", e)
                 state = SleepState.Error(e.message ?: e.javaClass.simpleName)

@@ -18,6 +18,12 @@ class FormatTest {
         assertEquals("+0:00", Format.deltaMinutes(0))
     }
 
+    @Test fun deltaShort() {
+        assertEquals("+32m", Format.deltaShort(32))
+        assertEquals("−1h 05m", Format.deltaShort(-65))
+        assertEquals("0m", Format.deltaShort(0))
+    }
+
     @Test fun band() {
         assertEquals("Ready", Format.band(70)); assertEquals("Steady", Format.band(69))
         assertEquals("Steady", Format.band(50)); assertEquals("Recover", Format.band(49))

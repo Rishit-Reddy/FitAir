@@ -147,7 +147,7 @@ private fun DataTab(vm: MainViewModel) {
             Column(Modifier.fillMaxWidth().padding(vertical = Spacing.m)) {
                 Row {
                     Text(r.type, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    Text("${r.count}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text("${r.count}", style = MaterialTheme.typography.titleMedium)
                 }
                 Text("${r.firstIso ?: Format.DASH}  →  ${r.lastIso ?: Format.DASH}", style = Type.bodySmall, color = dim)
                 Text("gap ${r.medianGapSec?.let { "%.1f s".format(it) } ?: Format.DASH}  ·  ${r.origins.joinToString(", ").ifEmpty { Format.DASH }}",

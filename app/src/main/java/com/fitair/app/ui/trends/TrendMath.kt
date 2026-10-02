@@ -1,5 +1,6 @@
 package com.fitair.app.ui.trends
 
+import com.fitair.app.ui.components.Tone
 import kotlin.math.abs
 import kotlin.math.roundToLong
 import kotlin.math.sqrt
@@ -55,6 +56,25 @@ object TrendMath {
         var n = 0
         for (x in v.asReversed()) { if (side(x, b) == s) n++ else break }
         return s to n
+    }
+
+    /**
+     * Tone of [value] for the headline dot. Readiness uses the 70/50 thresholds; HRV and resting HR are Neutral
+     * inside the band, Good outside it in the good direction and Caution in the bad one; Load is never toned.
+     */
+    fun tone(metric: TrendMetric, value: Double?, band: Band?): Tone {
+        if (value == null) return Tone.Neutral
+        return when (metric) {
+            TrendMetric.Load -> Tone.Neutral
+            TrendMetric.Readiness -> when { value >= 70 -> Tone.Good; value >= 50 -> Tone.Caution; else -> Tone.Alert }
+            else -> {
+                if (band == null) return Tone.Neutral
+                when (side(value, band)) {
+                    0 -> Tone.Neutral
+                    else -> if ((side(value, band) > 0) == metric.higherBetter) Tone.Good else Tone.Caution
+                }
+            }
+        }
     }
 
     /** One plain-language line about where the latest value sits against the usual range. */
