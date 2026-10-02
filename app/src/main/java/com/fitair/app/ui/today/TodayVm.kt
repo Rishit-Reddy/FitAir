@@ -24,7 +24,7 @@ import org.json.JSONObject
 import java.time.LocalDate
 import java.time.ZoneId
 
-class Vital(val label: String, val value: String, val unit: String?, val delta: String?, val tone: Tone)
+class Vital(val label: String, val value: String, val unit: String?, val delta: String?, val tone: Tone) { var dest: TodayDest? = null }
 
 class SleepNight(
     val asleep: String, val window: String?, val score: String?, val efficiency: String?, val deepRem: String?, val debt: String?,
@@ -105,6 +105,7 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         vitals.add(Vital("Steps", steps?.let { Format.thousands(it) } ?: Format.DASH, null,
             typSteps?.let { "typical ${Format.thousands(Math.round(it))} a day" }, Tone.Neutral))
 
+        vitals[0].dest = TodayDest.Sleep; vitals[1].dest = TodayDest.Hrv; vitals[2].dest = TodayDest.RestingHr
         return TodayUi(
             date = today, readiness = readiness, lastSyncMs = prefs.getLong(SyncPrefs.LAST, 0L), vitals = vitals,
             night = sleepNight(ctx, z, today, sleepMin, sleepJson), insights = insights(row), hasData = row != null,

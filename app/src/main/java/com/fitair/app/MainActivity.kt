@@ -28,7 +28,12 @@ import com.fitair.app.ui.coach.CoachVm
 import com.fitair.app.ui.settings.SettingsScreen
 import com.fitair.app.ui.theme.FitAirTheme
 import com.fitair.app.ui.theme.ThemeMode
+import com.fitair.app.ui.today.TodayDest
 import com.fitair.app.ui.today.TodayScreen
+import com.fitair.app.ui.trends.TrendMetric
+import com.fitair.app.ui.trends.TrendScreen
+import com.fitair.app.ui.sleep.SleepScreen
+import androidx.activity.compose.BackHandler
 import com.fitair.app.ui.today.TodayVm
 import java.io.IOException
 
@@ -205,6 +210,21 @@ private fun MainContent(vm: MainViewModel) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val todayVm: TodayVm = viewModel()
     val coachVm: CoachVm = viewModel()
+    // simple state-based stack: a full-screen detail opened from Today; system Back returns to Today
+    var dest by rememberSaveable { mutableStateOf<TodayDest?>(null) }
+    BackHandler(enabled = dest != null) { dest = null }
+    if (dest != null) {
+        Box(Modifier.fillMaxSize().imePadding()) {
+            when (dest) {
+                TodayDest.Sleep -> SleepScreen(onBack = { dest = null })
+                TodayDest.Readiness -> TrendScreen(TrendMetric.Readiness) { dest = null }
+                TodayDest.Hrv -> TrendScreen(TrendMetric.Hrv) { dest = null }
+                TodayDest.RestingHr -> TrendScreen(TrendMetric.RestingHr) { dest = null }
+                null -> {}
+            }
+        }
+        return
+    }
     Scaffold(
         modifier = Modifier.imePadding(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -227,7 +247,7 @@ private fun MainContent(vm: MainViewModel) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(todayVm)
+                0 -> TodayScreen(todayVm, onOpen = { dest = it })
                 1 -> CoachScreen(coachVm)
                 2 -> LogScreen(vm)
                 else -> SettingsScreen(vm)

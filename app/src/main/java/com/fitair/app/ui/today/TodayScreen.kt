@@ -4,6 +4,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import com.fitair.app.ui.theme.Shapes
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,10 +23,13 @@ import java.util.Locale
 
 private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())
 
+/** Screens opened by tapping a row or card on Today. */
+enum class TodayDest { Sleep, Readiness, Hrv, RestingHr }
+
 /** Today, top to bottom: header, readiness hero, vitals, last night, exceptions. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TodayScreen(vm: TodayVm) {
+fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
     val ui = vm.ui
     var sheet by remember { mutableStateOf(false) }
     // tick once a minute so "synced 12 min ago" stays true
@@ -42,19 +50,25 @@ fun TodayScreen(vm: TodayVm) {
                 EmptyState("No data yet", "Pull down to sync from Health Connect.")
                 return@Page
             }
-            ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = { if (ui.readiness != null) sheet = true })
+            ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = { onOpen(TodayDest.Readiness) })
+            if (ui.readiness != null) TextButton(onClick = { sheet = true }) { Text("Why this score", style = Type.label) }
 
             SectionBreak()
             ui.vitals.chunked(2).forEachIndexed { i, pair ->
                 if (i > 0) Spacer(Modifier.height(Spacing.m))
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
-                    pair.forEach { v -> MetricTile(v.label, v.value, v.unit, v.delta, v.tone, Modifier.weight(1f)) }
+                    pair.forEach { v ->
+                        val m = Modifier.weight(1f).let { b ->
+                            if (v.dest == null) b else b.clip(Shapes.card).clickable(role = Role.Button) { onOpen(v.dest!!) }
+                        }
+                        MetricTile(if (v.dest != null) v.label + " \u203A" else v.label, v.value, v.unit, v.delta, v.tone, m)
+                    }
                 }
             }
 
             ui.night?.let { n ->
                 SectionBreak()
-                SectionHeader("Last night")
+                SectionHeader("Last night \u203A", Modifier.clickable(role = Role.Button) { onOpen(TodayDest.Sleep) }.heightIn(min = Spacing.minTouch).wrapContentHeight(Alignment.CenterVertically))
                 Spacer(Modifier.height(Spacing.xs))
                 StatRow("Asleep", n.asleep)
                 n.window?.let { StatRow("In bed", it) }
