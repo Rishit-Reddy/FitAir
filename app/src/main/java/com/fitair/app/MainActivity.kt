@@ -6,6 +6,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -214,7 +217,7 @@ private fun MainContent(vm: MainViewModel) {
     var dest by rememberSaveable { mutableStateOf<TodayDest?>(null) }
     BackHandler(enabled = dest != null) { dest = null }
     if (dest != null) {
-        Box(Modifier.fillMaxSize().imePadding()) {
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
             when (dest) {
                 TodayDest.Sleep -> SleepScreen(onBack = { dest = null })
                 TodayDest.Readiness -> TrendScreen(TrendMetric.Readiness) { dest = null }
