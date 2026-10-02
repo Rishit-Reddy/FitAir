@@ -38,7 +38,30 @@ class AgendaVm(app: Application) : AndroidViewModel(app) {
     var loaded by mutableStateOf(false); private set
     var loading by mutableStateOf(false); private set
     var error by mutableStateOf<String?>(null); private set
+    /** "Sync" button state: true while a manual calendar sync is in progress; [syncNote] is the quiet result line. */
+    var syncing by mutableStateOf(false); private set
+    var syncNote by mutableStateOf<String?>(null); private set
     private var job: Job? = null
+
+    /** Asks Android/Google to sync the calendars now, then re-reads the events a few times as they arrive. */
+    fun resync() {
+        if (syncing) return
+        viewModelScope.launch {
+            syncing = true; syncNote = null
+            val n = withContext(Dispatchers.IO) { repo.requestSync() }
+            if (n == 0) {
+                syncNote = if (repo.hasPermission()) "No synced calendar account found" else "Calendar access is off"
+                syncing = false
+                return@launch
+            }
+            syncNote = "Syncing with Google\u2026"
+            kotlinx.coroutines.delay(4_000); refresh()
+            kotlinx.coroutines.delay(6_000); refresh()
+            val t = java.time.LocalTime.now().withSecond(0).withNano(0)
+            syncNote = "Checked at $t. Subscribed (URL) calendars update on Google's side every few hours."
+            syncing = false
+        }
+    }
 
     fun changes(): Flow<Unit> = repo.changes()
 

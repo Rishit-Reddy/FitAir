@@ -98,7 +98,15 @@ fun AgendaScreen(onBack: (() -> Unit)? = null, onOpenSettings: () -> Unit = {}) 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onBack != null) DetailHeader("Calendar", onBack)
-            else Text("Calendar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.l))
+            else Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter), verticalAlignment = Alignment.CenterVertically) {
+                Text("Calendar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(vertical = Spacing.l))
+                if (vm.hasPerm) TextButton(onClick = vm::resync, enabled = !vm.syncing) {
+                    Text(if (vm.syncing) "Syncing\u2026" else "Sync", style = Type.label)
+                }
+            }
+            vm.syncNote?.let {
+                Text(it, style = Type.bodySmall, color = dim, modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs))
+            }
             if (!vm.hasPerm) {
                 Column(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xl)) {
                     Text("See your events next to your readiness.", style = Type.body, color = dim)

@@ -18,6 +18,7 @@ import com.fitair.app.ui.components.StatusDot
 import com.fitair.app.ui.theme.Spacing
 import com.fitair.app.ui.theme.Type
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 const val PREF_COACH_SHARE_TITLES = "coach_share_titles"
@@ -63,6 +64,19 @@ fun CalendarSection() {
         TextButton(onClick = request) { Text("Show my calendar", style = Type.label) }
     } else {
         Text("Calendar access is on.", style = Type.bodySmall, color = dim)
+        var syncMsg by remember { mutableStateOf<String?>(null) }
+        var syncBusy by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+        TextButton(enabled = !syncBusy, onClick = {
+            scope.launch {
+                syncBusy = true
+                val n = withContext(Dispatchers.IO) { repo.requestSync() }
+                syncMsg = if (n == 0) "No synced calendar account found" else "Asked Google to sync. New events appear in a few seconds."
+                kotlinx.coroutines.delay(8_000)
+                syncBusy = false
+            }
+        }) { Text(if (syncBusy) "Syncing\u2026" else "Sync calendars now", style = Type.label) }
+        syncMsg?.let { Text(it, style = Type.bodySmall, color = dim) }
         if (cals.isEmpty()) Text("No calendars found.", style = Type.bodySmall, color = dim)
         cals.forEach { c ->
             val on = selected?.contains(c.id) ?: true

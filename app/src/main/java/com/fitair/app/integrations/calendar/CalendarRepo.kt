@@ -61,6 +61,43 @@ class CalendarRepo(private val ctx: Context) {
         catch (e: Exception) { AppLog.d("calendar: unsyncedSelected failed: ${e.message}"); emptyList() }
     }
 
+    /**
+     * Asks Android to sync the calendar accounts now (same as pulling to refresh in Google Calendar). Needs READ_CALENDAR only:
+     * the account names come from the Calendars table. Returns how many accounts were asked; 0 when none/permission missing.
+     * Note: this pulls what Google already has. URL-subscribed (ICS) calendars are re-fetched by Google on its own schedule.
+     */
+    fun requestSync(): Int {
+        if (!hasPermission()) return 0
+        return try {
+            val accounts = LinkedHashSet<Pair<String, String>>()
+            app.contentResolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                arrayOf(CalendarContract.Calendars.ACCOUNT_NAME, CalendarContract.Calendars.ACCOUNT_TYPE), null, null, null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val n = c.getString(0) ?: continue
+                    val t = c.getString(1) ?: continue
+                    // local-only calendars have no sync adapter
+                    if (t != CalendarContract.ACCOUNT_TYPE_LOCAL) accounts.add(n to t)
+                }
+            }
+            val extras = android.os.Bundle().apply {
+                putBoolean(android.content.ContentResolver.SYNC_EXTRAS_MANUAL, true)
+                putBoolean(android.content.ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
+            }
+            var n = 0
+            for ((name, type) in accounts) {
+                try {
+                    android.content.ContentResolver.requestSync(android.accounts.Account(name, type), CalendarContract.AUTHORITY, extras)
+                    n++
+                } catch (e: Exception) { AppLog.d("calendar: requestSync failed for a $type account: ${e.javaClass.simpleName}") }
+            }
+            AppLog.d("calendar: sync requested for $n account(s)")
+            n
+        } catch (e: SecurityException) { 0 }
+        catch (e: Exception) { AppLog.d("calendar: requestSync failed: ${e.message}"); 0 }
+    }
+
     suspend fun eventsForDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<CalEvent> = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext emptyList()
         try {
