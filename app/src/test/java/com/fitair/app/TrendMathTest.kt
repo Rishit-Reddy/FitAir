@@ -1,7 +1,9 @@
 package com.fitair.app
 
 import com.fitair.app.ui.trends.Band
+import com.fitair.app.ui.components.Tone
 import com.fitair.app.ui.trends.TrendMath
+import com.fitair.app.ui.trends.TrendMetric
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -41,5 +43,19 @@ class TrendMathTest {
         assertTrue(TrendMath.acwrText(1.0).contains("in line"))
         assertTrue(TrendMath.acwrText(1.5).contains("above"))
         assertTrue(TrendMath.acwrText(null).startsWith("Not enough"))
+    }
+
+    @Test fun toneByMetric() {
+        val b = Band(50.0, 5.0)
+        assertEquals(Tone.Neutral, TrendMath.tone(TrendMetric.Hrv, 52.0, b))
+        assertEquals(Tone.Caution, TrendMath.tone(TrendMetric.Hrv, 40.0, b))
+        assertEquals(Tone.Good, TrendMath.tone(TrendMetric.Hrv, 60.0, b))
+        assertEquals(Tone.Caution, TrendMath.tone(TrendMetric.RestingHr, 60.0, b))
+        assertEquals(Tone.Good, TrendMath.tone(TrendMetric.RestingHr, 40.0, b))
+        assertEquals(Tone.Good, TrendMath.tone(TrendMetric.Readiness, 72.0, null))
+        assertEquals(Tone.Caution, TrendMath.tone(TrendMetric.Readiness, 55.0, null))
+        assertEquals(Tone.Alert, TrendMath.tone(TrendMetric.Readiness, 40.0, null))
+        assertEquals(Tone.Neutral, TrendMath.tone(TrendMetric.Hrv, 60.0, null))
+        assertEquals(Tone.Neutral, TrendMath.tone(TrendMetric.Load, 99.0, b))
     }
 }

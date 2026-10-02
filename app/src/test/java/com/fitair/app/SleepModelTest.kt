@@ -1,6 +1,7 @@
 package com.fitair.app
 
 import com.fitair.app.ui.components.Tone
+import com.fitair.app.ui.sleep.Night
 import com.fitair.app.ui.sleep.SleepModel
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -46,5 +47,16 @@ class SleepModelTest {
         assertEquals(15.0, s.awake, 0.0); assertEquals(220.0, s.light, 0.0)
         assertEquals(90.0, s.rem, 0.0); assertEquals(60.0, s.deep, 0.0)
         assertTrue(SleepModel.stageMinutes(emptyMap()).isEmpty)
+    }
+
+    @Test fun defaultNightAndHeader() {
+        fun n(d: String, min: Double?) = Night(LocalDate.parse(d), min, null, null, null, emptyMap(), null)
+        val nights = listOf(n("2026-09-30", 400.0), n("2026-10-01", 420.0), n("2026-10-02", null))
+        assertEquals(LocalDate.parse("2026-10-01"), SleepModel.defaultNight(nights))
+        assertNull(SleepModel.defaultNight(listOf(n("2026-10-02", null))))
+        assertNull(SleepModel.defaultNight(emptyList()))
+        val today = LocalDate.parse("2026-10-02")
+        assertEquals("Last night", SleepModel.headerLabel(today, today))
+        assertEquals("Wed 30 Sep", SleepModel.headerLabel(today.minusDays(2), today))
     }
 }

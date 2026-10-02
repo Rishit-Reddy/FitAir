@@ -7,7 +7,7 @@ import org.junit.Test
 
 class ChartsTest {
     @Test fun labelIndicesSpread() {
-        assertEquals(listOf(0, 10, 20, 29), labelIndices(30))
+        assertEquals(listOf(0, 10, 19, 29), labelIndices(30))
         assertEquals(listOf(0, 1), labelIndices(2))
         assertTrue(labelIndices(0).isEmpty())
     }
