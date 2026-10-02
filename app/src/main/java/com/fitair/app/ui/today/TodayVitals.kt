@@ -34,16 +34,16 @@ import com.fitair.app.ui.theme.Type
 
 /** Which numbers sit in the vitals row. Heart rate has its own big card above it. */
 fun vitalIds(evening: Boolean): List<MetricId> =
-    if (evening) listOf(MetricId.Load, MetricId.Steps, MetricId.Bedtime) else listOf(MetricId.Readiness, MetricId.Sleep, MetricId.Load, MetricId.Steps)
+    if (evening) listOf(MetricId.Load, MetricId.Steps, MetricId.Bedtime) else listOf(MetricId.Readiness, MetricId.Sleep, MetricId.Load)
 
 /** One row of small number tiles: label, value, and a status dot with one or two words. No charts. */
 @Composable
 fun VitalsRow(snap: MetricSnapshot?, ids: List<MetricId>, mode: Mode, nowMs: Long, onCard: (MetricId) -> Unit, modifier: Modifier = Modifier) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
         ids.forEach { id ->
             val m = Modifier.weight(1f).fillMaxHeight()
-            if (snap == null) Box(m.heightIn(min = 72.dp).clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer))
+            if (snap == null) Box(m.clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer))
             else VitalTile(MetricCards.card(id, snap, com.fitair.app.ui.components.CardSize.Small, mode, nowMs), dark, { onCard(id) }, m)
         }
     }
@@ -57,21 +57,21 @@ private fun VitalTile(d: CardData, dark: Boolean, onClick: () -> Unit, modifier:
     Column(
         modifier.then(border).clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(role = Role.Button, onClick = onClick).clearAndSetSemantics { contentDescription = d.a11y; role = Role.Button }
-            .heightIn(min = 72.dp).padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
-        Text(d.title, style = Type.axis, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(d.title, style = Type.metricTitle, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
             buildAnnotatedString {
                 append(d.value ?: "—")
                 if (d.value != null && !d.unit.isNullOrEmpty()) withStyle(SpanStyle(fontSize = Type.unitS.fontSize, color = dim)) { append(" "); append(d.unit) }
             },
-            style = Type.valueS, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+            style = Type.valueGrid, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
         )
-        Spacer(Modifier.weight(1f).heightIn(min = 2.dp))
+        Spacer(Modifier.weight(1f).heightIn(min = 4.dp))
         val note = chip?.short ?: chip?.text ?: d.sub
         if (note != null) Row(verticalAlignment = Alignment.CenterVertically) {
             if (chip != null && chip.tone != Tone.Neutral) { StatusDot(toneColor(chip.tone)); Spacer(Modifier.width(5.dp)) }
-            Text(note, style = Type.axis, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(note, style = Type.unitS, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

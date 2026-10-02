@@ -182,38 +182,40 @@ fun TodayScreen(
                 MorningRecap(ui.snapshot, onSleep = { onOpen(TodayDest.Sleep) },
                     onReadiness = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) }, onSeen = { confirmSeen = true })
             }
-            val vitals: @Composable () -> Unit = { VitalsRow(ui.snapshot, vitalIds(evening), cardMode, now, openCard) }
+            val vitals: @Composable (Modifier) -> Unit = { m -> VitalsRow(ui.snapshot, vitalIds(evening), cardMode, now, openCard, m) }
             val snippets: @Composable () -> Unit = {
                 DaySnippets(agenda, ui.wake?.wakeMs?.takeIf { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() == ui.date }, now, onOpenCalendar, requestCalendar)
             }
-            val belowCards: @Composable () -> Unit = {
+            val water: @Composable () -> Unit = {
                 ui.water?.let { WaterBlock(ui, mode, vm, onEnableReminders = {
                     if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
                 }) }
-                ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) }
             }
+            val alert: @Composable () -> Unit = { ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) } }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 if (maxWidth >= WIDE) {
                     // unfolded: heart rate, numbers and Water on the left (max 560 dp), the day snippets on the right
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
                         Column(Modifier.weight(1f).widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                            if (recap) recapCard() else {
+                            if (recap) { recapCard(); water() } else {
                                 verdict?.let { Text(it, style = Type.body, maxLines = 2) }
-                                HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.weight(1f).heightIn(min = 150.dp))
-                                vitals()
+                                HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(min = 140.dp, max = 200.dp))
+                                water()
+                                vitals(Modifier.weight(1f).heightIn(min = 104.dp, max = 170.dp))
                             }
-                            belowCards()
+                            alert()
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { snippets() }
                     }
                 } else {
                     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                        if (recap) recapCard() else {
+                        if (recap) { recapCard(); water() } else {
                             verdict?.let { Text(it, style = Type.body, maxLines = 2) }
-                            HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.weight(1f).heightIn(min = 150.dp, max = 330.dp))
-                            vitals()
+                            HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(min = 140.dp, max = 200.dp))
+                            water()
+                            vitals(Modifier.weight(1f).heightIn(min = 104.dp, max = 170.dp))
                         }
-                        snippets(); belowCards()
+                        snippets(); alert()
                     }
                 }
             }
