@@ -4,8 +4,9 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
-import java.math.BigDecimal
-import java.math.RoundingMode
+import com.fitair.app.analytics.ReadinessMath
+import com.fitair.app.core.Format
+import com.fitair.app.core.Num
 import java.net.URLDecoder
 import java.time.DateTimeException
 import java.time.LocalDate
@@ -13,15 +14,13 @@ import java.time.ZoneId
 import java.util.Locale
 
 /**
- * On-device port of server/analytics.py + the read endpoints of server/app.py.
- * Same paths, same JSON shapes; computed from the local SQLite DB ([LocalStore]).
+ * In-process "HTTP-like" read API over the local SQLite DB ([LocalStore]); the coach tools and Today call it.
+ * Readiness v2 (see [ReadinessMath]) lives in [readiness].
  */
 object LocalApi {
     private val STAGE_NAMES = mapOf(0 to "unknown", 1 to "awake", 2 to "sleeping", 3 to "out_of_bed",
         4 to "light", 5 to "deep", 6 to "rem", 7 to "awake_in_bed")
     private val ASLEEP = setOf(2, 4, 5, 6)
-    private val WEIGHTS = linkedMapOf("sleep" to 0.20, "sleep_quality" to 0.15, "hrv" to 0.25,
-        "resting_hr" to 0.15, "load" to 0.10, "acwr" to 0.15)
     private const val MIN_BASELINE_DAYS = 7
     private const val DEFAULT_INTENSITY = 0.6
 
@@ -84,10 +83,7 @@ object LocalApi {
 
     // ---------- helpers ----------
 
-    internal fun r(x: Double?, n: Int = 1): Double? {
-        if (x == null || x.isNaN() || x.isInfinite()) return x
-        return BigDecimal(x).setScale(n, RoundingMode.HALF_EVEN).toDouble()  // exact-binary half-even, like Python round()
-    }
+    internal fun r(x: Double?, n: Int = 1): Double? = Num.r(x, n)
 
     internal fun j(x: Any?): Any = x ?: JSONObject.NULL
 
@@ -99,9 +95,9 @@ object LocalApi {
         return (0..n).map { d0.plusDays(it.toLong()) }
     }
 
-    internal fun clip(x: Double) = maxOf(0.0, minOf(100.0, x))
+    internal fun clip(x: Double) = Num.clip(x)
 
-    internal fun mean(v: List<Double>): Double? = if (v.isEmpty()) null else v.sum() / v.size
+    internal fun mean(v: List<Double>): Double? = Num.mean(v)
 
     private inline fun <T> SQLiteDatabase.rows(sql: String, args: Array<String> = emptyArray(), f: (android.database.Cursor) -> T): List<T> {
         val out = ArrayList<T>()
@@ -267,95 +263,92 @@ object LocalApi {
 
     internal class Ready(val score: Int?, val json: JSONObject)
 
+    /**
+     * Readiness v2: components sleep (the sleep score), hrv, resting_hr, load (ACWR) and subjective (check-in).
+     * Without [x] (no DailyMetrics context) only hrv and resting_hr can be scored.
+     */
     internal fun readiness(ser: Map<String, Day>, d: LocalDate, maxhr: Double, x: Extras? = null): Ready {
         val today = ser[d.toString()]!!
         val baseDays = (28 downTo 1).map { ser[d.minusDays(it.toLong()).toString()]!! }
         val b = baselinesFrom(baseDays, maxhr)
-        val comps = LinkedHashMap<String, JSONObject>()
         val scores = LinkedHashMap<String, Double>()
+        val comps = LinkedHashMap<String, JSONObject>()
         val text = HashMap<String, String>()
-        var notes = ArrayList<String>()
-        fun skip(label: String, why: String) { notes.add("$label skipped: $why.") }
+        val missing = LinkedHashMap<String, String>()
+        val notes = ArrayList<String>()
+        fun skip(key: String, why: String, note: Boolean = true) {
+            missing[key] = why
+            if (note) notes.add("${ReadinessMath.LABELS.getValue(key)} skipped: $why.")
+        }
         fun f(fmt: String, vararg a: Any) = String.format(Locale.US, fmt, *a)
 
-        val sl = today.sleepMin
-        if (sl == null) skip("Sleep", "no sleep session ends on this date")
-        else if (b.sleepDays < MIN_BASELINE_DAYS) skip("Sleep", "only ${b.sleepDays} baseline days (<$MIN_BASELINE_DAYS)")
-        else {
-            val ratio = sl / b.sleepMean!!
-            val sc = r(clip(100 - 200 * maxOf(0.0, 1 - ratio)))!!
-            comps["sleep"] = JSONObject().put("score", sc).put("value_min", sl).put("ratio", j(r(ratio, 2)))
+        if (x?.sleepScore != null) {
+            val sc = r(clip(x.sleepScore))!!
+            comps["sleep"] = JSONObject().put("score", sc).put("sleep_min", j(today.sleepMin))
             scores["sleep"] = sc
-            text["sleep"] = f("Sleep %.1f h vs 28-day mean %.1f h", sl / 60, b.sleepMean / 60)
-        }
+            text["sleep"] = "Sleep score ${sc.toInt()}" + (today.sleepMin?.let { ", ${Format.duration(Math.round(it))} asleep" } ?: "")
+        } else skip("sleep", "no sleep score for this date")
 
         for ((name, x0, sign, floor) in listOf(
             Quad("hrv", today.hrv, 1, 0.05), Quad("resting_hr", today.restingHr, -1, 0.02))) {
             val hrvK = name == "hrv"
-            val label = if (hrvK) "Overnight HRV" else "Resting HR"
             val unit = if (hrvK) "ms" else "bpm"
             val days = if (hrvK) b.hrvDays else b.restDays
-            if (x0 == null) skip(label, "no reading for this date")
-            else if (days < MIN_BASELINE_DAYS) skip(label, "only $days baseline days (<$MIN_BASELINE_DAYS)")
+            if (x0 == null) skip(name, "no reading for this date")
+            else if (days < MIN_BASELINE_DAYS) skip(name, "only $days baseline days (<$MIN_BASELINE_DAYS)")
             else {
                 val m = (if (hrvK) b.hrvMean else b.restMean)!!
                 val sd = (if (hrvK) b.hrvSd else b.restSd)!!
-                val z = (x0 - m) / maxOf(sd, 1.0, floor * m)
-                val sc = r(clip(75 + 25 * sign * z))!!
-                comps[name] = JSONObject().put("score", sc).put("value", x0).put("z", j(r(z, 2)))
+                val z = ReadinessMath.z(x0, m, sd, floor)
+                val sc = r(ReadinessMath.zScore(z, sign))!!
+                comps[name] = JSONObject().put("score", sc).put("value", x0).put("baseline_mean", j(r(m, 1))).put("z", j(r(z, 2)))
                 scores[name] = sc
-                text[name] = f("%s %.0f %s vs mean %.0f %s (z=%+.1f%s)", label, x0, unit, m, unit, z, if (sign < 0) ", lower is better" else "")
+                text[name] = f("%s %.0f %s, %s", if (hrvK) "HRV" else "Resting HR", x0, unit, Format.sdPhrase(z))
             }
         }
 
-        if (b.dataDays < MIN_BASELINE_DAYS) skip("Training load", "only ${b.dataDays} baseline days (<$MIN_BASELINE_DAYS)")
-        else if (b.weeklyLoad <= 0) skip("Training load", "no training history")
-        else {
-            val acute = baseDays.takeLast(7).sumOf { it.load }
-            val ratio = acute / b.weeklyLoad
-            val sc = r(clip(100 - maxOf(0.0, ratio - 1.1) * 100))!!
-            comps["load"] = JSONObject().put("score", sc).put("acute_7d", j(r(acute, 1))).put("ratio", j(r(ratio, 2)))
+        if (x?.acwr != null) {
+            val sc = r(ReadinessMath.acwrScore(x.acwr))!!
+            comps["load"] = JSONObject().put("score", sc).put("acwr", j(r(x.acwr, 2)))
+                .put("acute_load", j(r(x.acute, 1))).put("chronic_load", j(r(x.chronic, 1)))
             scores["load"] = sc
-            text["load"] = f("7-day load %.0f vs weekly average %.0f (ratio %.2f)", acute, b.weeklyLoad, ratio)
-        }
+            text["load"] = f("Training load ratio %.2f (7-day vs 28-day; 0.8-1.3 is comfortable)", x.acwr)
+        } else skip("load", "needs >= 14 days of history and a non-trivial chronic load")
 
-        if (x != null) {
-            if (x.sleepScore != null) {
-                val sc = r(clip(x.sleepScore))!!
-                comps["sleep_quality"] = JSONObject().put("score", sc).put("sleep_score", sc)
-                scores["sleep_quality"] = sc
-                text["sleep_quality"] = f("Sleep score %.0f/100 (duration, efficiency, deep+REM, regularity)", sc)
-            } else skip("Sleep quality", "no sleep score for this date")
-            if (x.acwr != null) {
-                val a = x.acwr
-                val sc = r(clip(if (a > 1.3) 100 - (a - 1.3) * 200 else if (a < 0.8) 100 - (0.8 - a) * 100 else 100.0))!!
-                comps["acwr"] = JSONObject().put("score", sc).put("acwr", j(r(a, 2)))
-                    .put("acute_load", j(r(x.acute, 1))).put("chronic_load", j(r(x.chronic, 1)))
-                scores["acwr"] = sc
-                text["acwr"] = f("Acute:chronic load ratio %.2f (7-day vs 28-day TRIMP; 0.8-1.3 is the comfortable range)", a)
-            } else skip("ACWR", "needs >= 14 days of history and a non-trivial chronic load")
-        }
+        if (x?.subjective != null) {
+            val sc = r(ReadinessMath.subjectiveScore(x.subjective))!!
+            comps["subjective"] = JSONObject().put("score", sc).put("checkin_mean", j(r(x.subjective, 2)))
+            scores["subjective"] = sc
+            text["subjective"] = f("Check-in %.1f of 5", x.subjective)
+        } else skip("subjective", "no check-in for this date", note = false)
 
-        var score: Int? = null
-        if (comps.size < 2) {
-            notes.add(0, "Not enough data for a readiness score (needs >= $MIN_BASELINE_DAYS days of baseline and at least two signals).")
+        val combined = ReadinessMath.combine(scores)
+        val drivers = JSONArray()
+        if (combined == null) {
+            notes.add(0, "Not enough data for a readiness score (needs >= $MIN_BASELINE_DAYS days of baseline and at least ${ReadinessMath.MIN_COMPONENTS} signals).")
         } else {
-            val wsum = scores.keys.sumOf { WEIGHTS[it]!! }
-            score = Math.rint(scores.entries.sumOf { WEIGHTS[it.key]!! * it.value } / wsum).toInt()
-            val impact = scores.mapValues { WEIGHTS[it.key]!! * (it.value - 75) / wsum }
-            val drivers = impact.keys.sortedBy { -Math.abs(impact[it]!!) }.take(3)
-                .map { (if (impact[it]!! >= 0) "Helping" else "Hurting") + ": " + text[it] }
-            notes = ArrayList(drivers + notes)
+            val pct = ReadinessMath.percents(combined.weights)
+            for (k in combined.ranked) {
+                val imp = combined.impact.getValue(k)
+                drivers.put(JSONObject().put("key", k).put("label", ReadinessMath.LABELS.getValue(k))
+                    .put("score", scores.getValue(k)).put("weight_pct", pct.getValue(k)).put("impact", r(imp, 2)!!)
+                    .put("text", text.getValue(k)))
+            }
+            notes.addAll(0, combined.ranked.take(3).map { (if (combined.impact.getValue(it) >= 0) "Helping" else "Hurting") + ": " + text.getValue(it) })
         }
         val compsJson = JSONObject()
-        for (k in WEIGHTS.keys) compsJson.put(k, comps[k] ?: JSONObject.NULL)
-        val json = JSONObject().put("date", d.toString()).put("score", j(score))
-            .put("components", compsJson).put("baseline", b.map).put("notes", JSONArray(notes))
-        return Ready(score, json)
+        for (k in ReadinessMath.WEIGHTS.keys) compsJson.put(k, comps[k] ?: JSONObject.NULL)
+        val missJson = JSONObject().also { o -> missing.forEach { (k, v) -> o.put(k, v) } }
+        val json = JSONObject().put("date", d.toString()).put("readiness_version", ReadinessMath.VERSION)
+            .put("score", j(combined?.score))
+            .put("components", compsJson).put("drivers", drivers).put("missing", missJson)
+            .put("baseline", b.map).put("notes", JSONArray(notes))
+        return Ready(combined?.score, json)
     }
 
-    /** Extra readiness inputs from [DailyMetrics]. */
-    internal class Extras(val sleepScore: Double?, val acwr: Double?, val acute: Double?, val chronic: Double?)
+    /** Extra readiness inputs from [DailyMetrics]; [subjective] is the check-in mean on 1..5. */
+    internal class Extras(val sleepScore: Double?, val acwr: Double?, val acute: Double?, val chronic: Double?,
+                          val subjective: Double? = null)
 
     private data class Quad(val name: String, val x: Double?, val sign: Int, val floor: Double)
 

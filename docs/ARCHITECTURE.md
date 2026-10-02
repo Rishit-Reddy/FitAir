@@ -1,7 +1,7 @@
 # FitAir architecture and roadmap
 
 Status: design, 2026-10-02. Audience: the implementing agents (two in parallel per phase) and the owner.
-Scope: the Android app only (`app/`). `server/` is legacy and gets deleted in Phase 1. `analysis/` (Mac DuckDB importer) is kept and only changes when the Drive format changes.
+Scope: the Android app only (`app/`). `server/` (legacy laptop server) was deleted in Phase 1. `analysis/` (Mac DuckDB importer) is kept and only changes when the Drive format changes.
 
 Conventions in this doc: **MUST** = required for acceptance; "verdict" = build / build later / don't build. References look like [R3] and are listed in section 7.
 
@@ -68,8 +68,8 @@ Everything else is convenience.
 ## 2. Information architecture and UI system
 
 ### 2.1 Screens and navigation
-- Bottom bar with **3 destinations**: `Today`, `Coach`, `Log`. Text labels only, as today.
-- `Settings` opens from a gear icon at the top right of Today. `Data` becomes **Settings > Diagnostics** (sync status, self-check, logs, DB size, Drive).
+- Bottom bar with **4 destinations** (user decision, P1): `Today`, `Coach`, `Log`, `Settings`. Text labels only, as today. (Supersedes the earlier "3 tabs plus a gear".)
+- `Settings` has four plain sub-tabs: **General** (theme, coach keys, Drive backup), **Data** (sync status, data probe), **Logs** (app log) and **Diagnostics** (self-check, debug bundle, recent AI calls).
 - Sheets (ModalBottomSheet), not screens: readiness breakdown, check-in, add task, suggestion detail, plan preferences.
 - Expanded width (600dp or more, the unfolded foldable), from P8: Today on the left (max 480dp) and Coach on the right. Use `BoxWithConstraints`; do not add the adaptive library.
 - Navigation stays a simple `when(tab)` plus sheet state. **Do not add Navigation-Compose**; there aren't enough screens to justify it.
@@ -77,7 +77,7 @@ Everything else is convenience.
 ### 2.2 Today: content and order (top to bottom)
 | # | Block | Content | Why in this position |
 |---|---|---|---|
-| 1 | Header | `Fri 2 Oct` on the left, freshness pill ("synced 12 min ago" / "stale 3 h") and gear on the right | Trust: you see right away whether the numbers are current |
+| 1 | Header | `Fri 2 Oct` on the left, freshness pill ("synced 12 min ago" / "stale 3 h") on the right (Settings is a tab, no gear) | Trust: you see right away whether the numbers are current |
 | 2 | Readiness hero | Large number, band word (Ready / Steady / Recover), **one** driver line ("HRV 38 ms, 1.4 SD below baseline"). Tap opens the breakdown sheet. | The single most important number |
 | 3 | Check-in prompt (P3) | Shows only until done: "How do you feel?" with 4 one-tap scales (sheet). Then it collapses to a tiny line. | Feeds readiness and the plan |
 | 4 | Plan (P4) | Up to 3 SuggestionCards in time order: Train / Cook / Wind down | The "what to do" answer |
@@ -351,7 +351,7 @@ Two agents per phase: **A** and **B**. They own disjoint files; a "handoff" name
 
 ### P2 — Calendar on Today, plus package restructure (v0.7)
 - **A (first, about 1 h, merge before B starts edits):** mechanical move to the 3.1 packages, plus the split of `MainViewModel` into per-screen VMs. No behaviour change.
-- **B:** `integrations/calendar/*`, `data/dao/CalEventDao.kt`, the Agenda block (`ui/today/AgendaSection.kt`, `AgendaRow`, `FreeGapRow`), a calendar picker in Settings, the permission flow, a ContentObserver, and the SyncWorker hook. Nav goes to 3 tabs, with a gear for Settings and Data moved into Diagnostics (A does this after the move).
+- **B:** `integrations/calendar/*`, `data/dao/CalEventDao.kt`, the Agenda block (`ui/today/AgendaSection.kt`, `AgendaRow`, `FreeGapRow`), a calendar picker in Settings, the permission flow, a ContentObserver, and the SyncWorker hook. Navigation stays at 4 tabs (done in P1).
 - **Acceptance:**
   1. Tap "Show my calendar" and grant: today's remaining events appear within 2 s, including a recurring one.
   2. Free gaps of 45 min or more show up.
@@ -436,7 +436,7 @@ Build only if Open question 7 is "yes". `TodoistTaskSource` (API v1, token in Se
 3. The planner is a deterministic slot solver. The LLM only chooses among validated candidates and writes 90-character reasons, and the app works fully offline.
 4. The planner covers exactly three anchors (train, cook, wind-down), with at most 3 cards a day. To-dos are listed, not time-blocked.
 5. Coach answers are a JSON contract rendered as cards, 70 words or less by default, with hard output-token caps and thinking off for chat.
-6. Navigation has 3 tabs (Today, Coach, Log). Settings is behind a gear, Data moves into Diagnostics, and there is no Navigation-Compose and no Room.
+6. Navigation has 4 tabs (Today, Coach, Log, Settings). Data and Logs live in Settings sub-tabs, and there is no Navigation-Compose and no Room.
 7. Readiness v2 removes the sleep and load double-counting and adds a subjective check-in component.
 8. Schema v3 adds all new tables in P1 so later phases don't need migrations.
 9. Keys are moved to a Keystore-backed `SecretStore`. Cleartext traffic and `server/` are removed.

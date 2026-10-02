@@ -1,6 +1,10 @@
 package com.fitair.app
 
 import android.content.Context
+import com.fitair.app.coach.*
+import com.fitair.app.data.dao.AiCallDao
+import com.fitair.app.data.dao.AiCallRow
+import com.fitair.app.secure.SecretStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -15,7 +19,14 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-data class ChatMsg(val role: String /* "user" | "assistant" | "note" */, val text: String)
+/**
+ * [text] is always displayable (markdown for answers). [json] is the structured CoachAnswer (assistant only),
+ * [trace] the "Used: ..." line, [long] marks an "Explain more" answer, [truncated] a cut-off one.
+ */
+data class ChatMsg(
+    val role: String /* "user" | "assistant" | "note" */, val text: String,
+    val json: String? = null, val trace: String = "", val long: Boolean = false, val truncated: Boolean = false,
+)
 
 object ServerApi {
     /** GET [path] (including query string), computed on-device from the local database. @throws IOException with readable message. */
@@ -36,7 +47,11 @@ object ChatStore {
         val s = ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE).getString(KEY, null)
         if (s.isNullOrEmpty()) emptyList() else {
             val a = JSONArray(s)
-            (0 until a.length()).map { val o = a.getJSONObject(it); ChatMsg(o.getString("role"), o.getString("text")) }
+            (0 until a.length()).map {
+                val o = a.getJSONObject(it)
+                ChatMsg(o.getString("role"), o.getString("text"), o.optString("json").ifEmpty { null }, o.optString("trace"),
+                    o.optBoolean("long"), o.optBoolean("truncated"))
+            }
         }
     } catch (e: Exception) {
         AppLog.d("ChatStore.load failed: ${e.message}")
@@ -45,7 +60,8 @@ object ChatStore {
 
     fun save(ctx: Context, msgs: List<ChatMsg>) {
         val a = JSONArray()
-        msgs.takeLast(MAX).forEach { a.put(JSONObject().put("role", it.role).put("text", it.text)) }
+        msgs.takeLast(MAX).forEach { a.put(JSONObject().put("role", it.role).put("text", it.text).put("json", it.json ?: "")
+            .put("trace", it.trace).put("long", it.long).put("truncated", it.truncated)) }
         ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE).edit().putString(KEY, a.toString()).apply()
     }
 
@@ -54,92 +70,134 @@ object ChatStore {
     }
 }
 
-class CoachRepo(private val ctx: Context) {
+/** Result of one coach turn. [text] is the markdown rendering (always displayable); [answerJson] the structured answer or null for plain text. */
+data class CoachReply(val text: String, val answerJson: String?, val trace: String, val truncated: Boolean, val long: Boolean)
+
+class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient? = null) {
     private val prefs = ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE)
     private val zone: ZoneId = ZoneId.systemDefault()
 
-    private companion object {
-        const val MAX_ROUNDS = 6
-        const val MAX_RESULT = 12_000
+    companion object {
+        const val MAX_ROUNDS = 4
+        const val MAX_RESULT = 3_000
+        const val HISTORY = 6
     }
-
-    private class ToolDef(val name: String, val desc: String, val props: List<Triple<String, String, String>>)
 
     // (param name, json type, description)
     private val tools = listOf(
-        ToolDef("get_day_summary", "Daily summary (steps, distance, resting HR, HRV, HR stats, sleep, exercise count, kcal, readiness) for one date.",
+        ToolSpec("get_day_summary", "Daily summary (steps, distance, resting HR, HRV, HR stats, sleep, exercise count, kcal, readiness) for one date.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
-        ToolDef("get_range_summary", "Array of daily summaries for an inclusive date range.",
+        ToolSpec("get_range_summary", "Array of daily summaries for an inclusive date range.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
-        ToolDef("get_heart_rate", "Heart rate buckets (min/mean/max/n) between two epoch-ms timestamps.",
+        ToolSpec("get_heart_rate", "Heart rate buckets (min/mean/max/n) between two epoch-ms timestamps.",
             listOf(Triple("from_ms", "integer", "Start, epoch milliseconds UTC"), Triple("to_ms", "integer", "End, epoch milliseconds UTC"),
                 Triple("bucket_s", "integer", "Bucket size in seconds (multiple of 30; heart rate is stored at 30 s resolution; 0 = raw samples, only available inside workouts)"))),
-        ToolDef("get_workouts", "Workouts in a date range with duration, HR mean/max, 1-min HR recovery, drift and time in zones.",
+        ToolSpec("get_workouts", "Workouts in a date range with duration, HR mean/max, 1-min HR recovery, drift and time in zones.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
-        ToolDef("get_readiness", "The app's own readiness score (0-100) with components, baseline and notes for a date.",
+        ToolSpec("get_readiness", "The app's own readiness score (0-100) with components, baseline and notes for a date.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
-        ToolDef("get_baselines", "28-day baselines (resting HR, HRV, sleep) with standard deviations.", emptyList()),
-        ToolDef("get_daily_metrics", "The app's own stored daily metrics per date: sleep_score (with components, need and sleep debt), readiness (with full breakdown), TRIMP load, acute/chronic load, ACWR, resting HR, HRV, sleep minutes, steps and insights.",
+        ToolSpec("get_baselines", "28-day baselines (resting HR, HRV, sleep) with standard deviations.", emptyList()),
+        ToolSpec("get_daily_metrics", "The app's own stored daily metrics per date: sleep_score (with components, need and sleep debt), readiness (with full breakdown), TRIMP load, acute/chronic load, ACWR, resting HR, HRV, sleep minutes, steps and insights.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
-        ToolDef("get_insights", "Rule-based insights (info/watch/alert) for one date, e.g. elevated resting HR, low HRV, sleep debt, load spikes.",
+        ToolSpec("get_insights", "Rule-based insights (info/watch/alert) for one date, e.g. elevated resting HR, low HRV, sleep debt, load spikes.",
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
-        ToolDef("get_load", "Daily training load: TRIMP, acute (7-day EWMA), chronic (28-day EWMA) and ACWR for a date range.",
+        ToolSpec("get_load", "Daily training load: TRIMP, acute (7-day EWMA), chronic (28-day EWMA) and ACWR for a date range.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
     )
 
-    suspend fun ask(history: List<ChatMsg>, onNote: (String) -> Unit): String = withContext(Dispatchers.IO) {
-        val provider = (prefs.getString("coach_provider", "gemini") ?: "gemini").lowercase().let { if (it == "openai") "openai" else "gemini" }
-        val apiKey = (prefs.getString(if (provider == "openai") "openai_key" else "gemini_key", "") ?: "").trim()
-        val model = (prefs.getString(if (provider == "openai") "coach_model_openai" else "coach_model_gemini", "") ?: "").trim()
-            .ifEmpty { if (provider == "openai") "gpt-4o-mini" else "gemini-2.5-flash" }
-        if (apiKey.isEmpty()) {
-            throw IOException("No ${if (provider == "openai") "OpenAI" else "Gemini"} API key set. Add it in Settings to use the coach.")
+    /** Legacy entry used by MainViewModel: returns the answer as displayable text. */
+    suspend fun ask(history: List<ChatMsg>, onNote: (String) -> Unit): String = answer(history, false, onNote).text
+
+    private fun provider() = (prefs.getString("coach_provider", "gemini") ?: "gemini").lowercase().let { if (it == "openai") "openai" else "gemini" }
+
+    /**
+     * One coach turn: tool loop (max [MAX_ROUNDS] tool rounds, then a forced final answer). [long] = "Explain more".
+     * Logs one ai_call row. @throws IOException with a readable message.
+     */
+    suspend fun answer(history: List<ChatMsg>, long: Boolean, onNote: (String) -> Unit): CoachReply = withContext(Dispatchers.IO) {
+        val provider = clientOverride?.provider ?: provider()
+        val model = Models.selected(ctx, provider)
+        val client = clientOverride ?: run {
+            val key = SecretStore.get(ctx, if (provider == "openai") "openai_key" else "gemini_key").trim()
+            if (key.isEmpty()) throw IOException("No ${if (provider == "openai") "OpenAI" else "Gemini"} API key set. Add it in Settings to use the coach.")
+            val q = ModelQuirks(ctx)
+            if (provider == "openai") OpenAiClient(key, q) else GeminiClient(key, q)
         }
-        val msgs = history.filter { it.role == "user" || it.role == "assistant" }.takeLast(40)
+        var msgs = history.filter { it.role == "user" || it.role == "assistant" }.takeLast(HISTORY).dropWhile { it.role != "user" }
         if (msgs.isEmpty()) throw IOException("Nothing to send")
         val t0 = System.currentTimeMillis()
-        AppLog.d("coach ask: provider=$provider model=$model messages=${msgs.size}")
+        AppLog.d("coach ask: provider=$provider model=$model messages=${msgs.size} long=$long")
 
-        val system = buildSystemPrompt()
-        val answer = if (provider == "openai") runOpenAi(apiKey, model, system, msgs, onNote)
-        else runGemini(apiKey, model, system, msgs, onNote)
-        AppLog.d("coach done in ${System.currentTimeMillis() - t0} ms, ${answer.length} chars")
-        answer
+        val system = buildSystemPrompt(long)
+        val conv = ArrayList<LlmMsg>()
+        msgs.forEach { conv.add(if (it.role == "user") LlmMsg.User(it.text) else LlmMsg.Assistant(it.text)) }
+        val schema = Prompt.answerSchema
+        val cap = if (long) Models.CAP_LONG else Models.CAP_CHAT
+        val thinking = if (long) Thinking.Low else Thinking.Off
+
+        var usage = Usage(); var calls = 0; var finish: String? = null; var usedModel = model
+        var err: String? = null
+        val used = LinkedHashSet<String>()
+        try {
+            var rounds = 0
+            while (true) {
+                val force = rounds >= MAX_ROUNDS
+                val resp = client.generate(LlmRequest(model, system, conv, tools, cap, thinking, schema, force))
+                calls++; usage += resp.usage; finish = resp.finish; usedModel = resp.model
+                if (resp.usage.inTok > Prompt.TOTAL_WARN_TOKENS) AppLog.d("WARN coach: ${resp.usage.inTok} input tokens in one call")
+                if (resp.calls.isEmpty() || force) {
+                    if (resp.text.isEmpty()) throw IOException("The model returned an empty answer (finish=${resp.finish})")
+                    val parsed = AnswerParser.parse(resp.text)
+                    val truncated = resp.finish == "length"
+                    val reply = CoachReply(
+                        text = AnswerParser.toMarkdown(parsed),
+                        answerJson = if (parsed.plain == null) AnswerParser.toJson(parsed) else null,
+                        trace = if (used.isEmpty()) "" else "Used: " + used.joinToString(", "),
+                        truncated = truncated, long = long,
+                    )
+                    AppLog.d("coach done in ${System.currentTimeMillis() - t0} ms, ${reply.text.length} chars, $calls call(s), finish=$finish")
+                    return@withContext reply
+                }
+                rounds++
+                conv.add(LlmMsg.Assistant(resp.text, resp.calls, resp.raw))
+                val results = resp.calls.map { c ->
+                    onNote(noteFor(c.name, c.args))
+                    used.add(c.name.removePrefix("get_").replace('_', ' '))
+                    ToolResult(c, runTool(c.name, c.args))
+                }
+                conv.add(LlmMsg.ToolResults(results))
+            }
+            @Suppress("UNREACHABLE_CODE") throw IllegalStateException()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            err = e.message ?: e.javaClass.simpleName
+            throw e
+        } finally {
+            AiCallDao.insert(ctx, AiCallRow(System.currentTimeMillis(), if (long) "chat_long" else "chat", provider, usedModel, calls,
+                usage.inTok, usage.outTok, usage.thoughtTok, usage.cachedTok, System.currentTimeMillis() - t0, err == null, finish, err))
+        }
     }
 
     // ---------- context ----------
 
-    private suspend fun buildSystemPrompt(): String {
+    private suspend fun buildSystemPrompt(long: Boolean): String {
         val now = java.time.ZonedDateTime.now(zone)
         val today = now.toLocalDate()
         val fmt = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy, HH:mm", Locale.ENGLISH)
-        var ctxText: String
-        try {
+        val block = try {
             val t = System.currentTimeMillis()
-            val range = ServerApi.get(ctx, "/summary/range?from=${today.minusDays(6)}&to=$today&tz=${enc(zone.id)}")
-            val ready = try { ServerApi.get(ctx, "/readiness?date=$today&tz=${enc(zone.id)}") } catch (e: IOException) {
-                AppLog.d("coach: readiness prefetch failed: ${e.message}"); null
-            }
+            val j = ServerApi.get(ctx, "/daily?from=${today.minusDays(6)}&to=$today&tz=${enc(zone.id)}")
+            val arr = j.optJSONArray("days") ?: JSONArray()
             AppLog.d("coach: context prefetched in ${System.currentTimeMillis() - t} ms")
-            ctxText = "Last 7 days summary (/summary/range):\n${trunc(range.toString())}\n\n" +
-                "Today's readiness (/readiness):\n${if (ready != null) trunc(ready.toString()) else "unavailable"}"
+            Prompt.context((0 until arr.length()).map { arr.getJSONObject(it) }, today.toString())
         } catch (e: IOException) {
             AppLog.d("coach: context prefetch failed: ${e.message}")
-            ctxText = "DATA UNAVAILABLE: the phone's own database could not be read (${e.message}). " +
-                "Tell the user their data is currently unavailable; do not guess numbers. Tools will probably fail too."
+            Prompt.context(null, today.toString(), e.message)
         }
-        return """
-You are FitAir Coach, a concise, honest, data-driven fitness and recovery coach for one user: a Fitbit Air wearer who is a data scientist and likes numbers.
-Now: ${now.format(fmt)} (${zone.id}). Today is ${today} (${today.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)}). Use this timezone for all dates; times from tools are epoch ms UTC.
-
-Rules:
-- Use the tools to fetch specifics (a day, a range, heart rate series, workouts, readiness, baselines) instead of guessing. Never invent numbers. If data is missing or a tool fails, say so plainly.
-- sleep_score, readiness and training load (TRIMP, acute/chronic load, ACWR) are this app's own metrics with documented components (get_daily_metrics returns the breakdowns, get_load the load series, get_insights rule-based flags). Prefer them over re-deriving your own scores; explain them via their components. Readiness components: sleep duration, sleep quality (sleep_score), HRV, resting HR, load ratio, ACWR. They are not clinical measures. You give no medical diagnosis; suggest seeing a clinician for worrying symptoms.
-- Be brief by default: at most 4 short lines or bullets (about 80 words). Lead with the answer and the one or two numbers that matter, then one actionable suggestion. No preamble, no restating the question, no lists of caveats. Go longer only when the user explicitly asks for detail or a review. Cite concrete numbers and compare against baselines where useful.
-
-Always-available context (fetched just now):
-$ctxText
-""".trimIndent()
+        val rules = Prompt.rules(now.format(fmt), zone.id, today.toString(),
+            today.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH), long)
+        return Prompt.system(block, rules)
     }
 
     // ---------- tool execution ----------
@@ -167,9 +225,19 @@ $ctxText
         }
     }
 
-    private fun trunc(s: String) = if (s.length <= MAX_RESULT) s else s.take(MAX_RESULT) + "...[truncated, ${s.length} chars total]"
+    /** Drops *_json blobs, then hard-truncates to [MAX_RESULT] chars. */
+    private fun compact(j: JSONObject): String {
+        fun strip(x: Any?): Any? = when (x) {
+            is JSONObject -> JSONObject().also { o -> x.keys().forEach { k -> if (!k.endsWith("_json")) o.put(k, strip(x.get(k))) } }
+            is JSONArray -> JSONArray().also { a -> for (i in 0 until x.length()) a.put(strip(x.get(i))) }
+            else -> x
+        }
+        var s = j.toString()
+        if (s.length > MAX_RESULT) s = (strip(j) as JSONObject).toString()
+        return if (s.length <= MAX_RESULT) s else s.take(MAX_RESULT) + "...[truncated, ${s.length} chars total]"
+    }
 
-    /** Runs a tool; never throws except cancellation. Returns the (truncated) result JSON string. */
+    /** Runs a tool; never throws except cancellation. Returns the (<= 3k chars) result JSON string. */
     private suspend fun runTool(name: String, args: JSONObject): String {
         val t = System.currentTimeMillis()
         AppLog.d("coach tool: $name $args")
@@ -195,7 +263,7 @@ $ctxText
                 "get_load" -> "/load?from=${enc(args.getString("from"))}&to=${enc(args.getString("to"))}"
                 else -> return JSONObject().put("error", "unknown tool $name").toString()
             }
-            val out = trunc(ServerApi.get(ctx, path).toString())
+            val out = compact(ServerApi.get(ctx, path))
             AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
             out
         } catch (e: IOException) {
@@ -206,153 +274,4 @@ $ctxText
             JSONObject().put("error", "invalid or missing arguments: ${e.message}").toString()
         }
     }
-
-    private fun parseArgs(raw: String?): JSONObject = try { JSONObject(if (raw.isNullOrBlank()) "{}" else raw) } catch (e: Exception) { JSONObject() }
-
-    // ---------- HTTP ----------
-
-    private fun postJson(url: String, headers: Map<String, String>, body: JSONObject, label: String): JSONObject {
-        val t = System.currentTimeMillis()
-        val c = URL(url).openConnection() as HttpURLConnection
-        try {
-            c.requestMethod = "POST"
-            c.connectTimeout = 30_000
-            c.readTimeout = 120_000
-            c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json")
-            headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-            c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = c.responseCode
-            val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
-            AppLog.d("coach $label -> HTTP $code in ${System.currentTimeMillis() - t} ms (${text.length} B)")
-            if (code !in 200..299) {
-                val msg = try { JSONObject(text).getJSONObject("error").optString("message") } catch (e: Exception) { "" }
-                    .ifEmpty { text.take(300) }
-                throw IOException("$label HTTP $code: $msg")
-            }
-            return try { JSONObject(text) } catch (e: Exception) { throw IOException("$label returned invalid JSON") }
-        } catch (e: IOException) {
-            if (e.message?.contains(" HTTP ") != true) AppLog.d("coach $label failed after ${System.currentTimeMillis() - t} ms: ${e.message}")
-            if (e.message?.contains(label) == true) throw e
-            throw IOException("$label network error: ${e.message ?: e.javaClass.simpleName}", e)
-        } finally {
-            c.disconnect()
-        }
-    }
-
-    // ---------- Gemini ----------
-
-    private fun runGemini(key: String, model: String, system: String, msgs: List<ChatMsg>, onNote: (String) -> Unit): String {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/${enc(model)}:generateContent"
-        val headers = mapOf("x-goog-api-key" to key)
-        val decls = JSONArray()
-        for (t in tools) {
-            val d = JSONObject().put("name", t.name).put("description", t.desc)
-            if (t.props.isNotEmpty()) {
-                val p = JSONObject(); val req = JSONArray()
-                t.props.forEach { (n, ty, ds) -> p.put(n, JSONObject().put("type", ty.uppercase()).put("description", ds)); req.put(n) }
-                d.put("parameters", JSONObject().put("type", "OBJECT").put("properties", p).put("required", req))
-            }
-            decls.put(d)
-        }
-        val contents = JSONArray()
-        msgs.forEach {
-            contents.put(JSONObject().put("role", if (it.role == "user") "user" else "model")
-                .put("parts", JSONArray().put(JSONObject().put("text", it.text))))
-        }
-        var rounds = 0
-        while (true) {
-            val force = rounds >= MAX_ROUNDS
-            val body = JSONObject()
-                .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
-                .put("contents", contents)
-                .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", decls)))
-            if (force) body.put("toolConfig", JSONObject().put("functionCallingConfig", JSONObject().put("mode", "NONE")))
-            AppLog.d("coach gemini request: round=$rounds model=$model force_final=$force")
-            val resp = runBlockingPost(url, headers, body, "Gemini")
-            val cand = resp.optJSONArray("candidates")?.optJSONObject(0)
-            if (cand == null) {
-                val br = resp.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
-                throw IOException("Gemini returned no answer" + if (br.isNotEmpty()) " (blocked: $br)" else "")
-            }
-            val content = cand.optJSONObject("content")
-            val parts = content?.optJSONArray("parts") ?: JSONArray()
-            val calls = ArrayList<JSONObject>()
-            val sb = StringBuilder()
-            for (i in 0 until parts.length()) {
-                val p = parts.getJSONObject(i)
-                p.optJSONObject("functionCall")?.let { calls.add(it) }
-                if (!p.has("functionCall") && !p.optBoolean("thought", false) && p.has("text")) sb.append(p.getString("text"))
-            }
-            if (calls.isEmpty() || force) {
-                val txt = sb.toString().trim()
-                if (txt.isEmpty()) throw IOException("Gemini returned an empty answer (finishReason=${cand.optString("finishReason")})")
-                return txt
-            }
-            rounds++
-            contents.put(JSONObject().put("role", "model").put("parts", parts))
-            val respParts = JSONArray()
-            for (fc in calls) {
-                val name = fc.getString("name")
-                val args = fc.optJSONObject("args") ?: JSONObject()
-                onNote(noteFor(name, args))
-                val result = runBlockingTool(name, args)
-                val rj = try { JSONObject(result) } catch (e: Exception) { JSONObject().put("error", "bad result") }
-                respParts.put(JSONObject().put("functionResponse", JSONObject().put("name", name).put("response", JSONObject().put("result", rj))))
-            }
-            contents.put(JSONObject().put("role", "user").put("parts", respParts))
-        }
-    }
-
-    // ---------- OpenAI ----------
-
-    private fun runOpenAi(key: String, model: String, system: String, msgs: List<ChatMsg>, onNote: (String) -> Unit): String {
-        val url = "https://api.openai.com/v1/chat/completions"
-        val headers = mapOf("Authorization" to "Bearer $key")
-        val toolArr = JSONArray()
-        for (t in tools) {
-            val p = JSONObject(); val req = JSONArray()
-            t.props.forEach { (n, ty, ds) -> p.put(n, JSONObject().put("type", ty).put("description", ds)); req.put(n) }
-            toolArr.put(JSONObject().put("type", "function").put("function", JSONObject()
-                .put("name", t.name).put("description", t.desc)
-                .put("parameters", JSONObject().put("type", "object").put("properties", p).put("required", req))))
-        }
-        val messages = JSONArray()
-        messages.put(JSONObject().put("role", "system").put("content", system))
-        msgs.forEach { messages.put(JSONObject().put("role", it.role).put("content", it.text)) }
-        var rounds = 0
-        while (true) {
-            val force = rounds >= MAX_ROUNDS
-            val body = JSONObject().put("model", model).put("messages", messages).put("tools", toolArr)
-            if (force) body.put("tool_choice", "none")
-            AppLog.d("coach openai request: round=$rounds model=$model force_final=$force")
-            val resp = runBlockingPost(url, headers, body, "OpenAI")
-            val msg = resp.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-                ?: throw IOException("OpenAI returned no answer")
-            val calls = msg.optJSONArray("tool_calls")
-            if (calls == null || calls.length() == 0 || force) {
-                val txt = (if (msg.isNull("content")) "" else msg.optString("content")).trim()
-                if (txt.isEmpty()) throw IOException("OpenAI returned an empty answer")
-                return txt
-            }
-            rounds++
-            messages.put(msg)
-            for (i in 0 until calls.length()) {
-                val c = calls.getJSONObject(i)
-                val fn = c.getJSONObject("function")
-                val name = fn.getString("name")
-                val args = parseArgs(fn.optString("arguments"))
-                onNote(noteFor(name, args))
-                val result = runBlockingTool(name, args)
-                messages.put(JSONObject().put("role", "tool").put("tool_call_id", c.getString("id")).put("content", result))
-            }
-        }
-    }
-
-    // The provider loops are plain (already on Dispatchers.IO); bridge to suspend helpers.
-    private fun runBlockingPost(url: String, headers: Map<String, String>, body: JSONObject, label: String): JSONObject =
-        postJson(url, headers, body, label)
-
-    private fun runBlockingTool(name: String, args: JSONObject): String =
-        kotlinx.coroutines.runBlocking { runTool(name, args) }
 }

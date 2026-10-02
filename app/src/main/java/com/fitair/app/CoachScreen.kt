@@ -1,9 +1,13 @@
 package com.fitair.app
 
+import com.fitair.app.coach.AnswerParser
+import com.fitair.app.ui.coach.CoachVm
+import com.fitair.app.ui.components.CoachAnswerCard
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -21,7 +25,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 
-private val SUGGESTIONS = listOf("How ready am I today?", "How was my sleep this week?", "Review my last workout")
+private val SUGGESTIONS = listOf("How ready am I today?", "Why is my readiness where it is?", "Should I train hard today?")
 
 /** Minimal markdown: **bold** inline and "- " bullets. */
 private fun renderMarkdown(src: String): AnnotatedString = buildAnnotatedString {
@@ -41,35 +45,53 @@ private fun renderMarkdown(src: String): AnnotatedString = buildAnnotatedString 
     }
 }
 
+/** Coach tab backed by [CoachVm] (the target path). */
 @Composable
-fun CoachScreen(vm: MainViewModel) {
-    val msgs = vm.chat
+fun CoachScreen(vm: CoachVm) = CoachContent(
+    msgs = vm.chat, thinking = vm.thinking, status = vm.status, error = vm.chatError,
+    onSend = vm::sendChat, onRetry = vm::retryChat, onClear = vm::clearChat,
+    onExplain = vm::explainMore, onContinue = vm::continueChat,
+)
+
+/** Legacy path backed by MainViewModel; delete together with MainViewModel's chat code once CoachVm is wired. */
+@Composable
+fun CoachScreen(vm: MainViewModel) = CoachContent(
+    msgs = vm.chat, thinking = vm.thinking, status = null, error = vm.chatError,
+    onSend = vm::sendChat, onRetry = vm::retryChat, onClear = vm::clearChat, onExplain = null, onContinue = {},
+)
+
+@Composable
+private fun CoachContent(
+    msgs: List<ChatMsg>, thinking: Boolean, status: String?, error: String?,
+    onSend: (String) -> Unit, onRetry: () -> Unit, onClear: () -> Unit, onExplain: (() -> Unit)?, onContinue: () -> Unit,
+) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     val listState = rememberLazyListState()
     var input by remember { mutableStateOf("") }
 
-    val extra = (if (vm.thinking) 1 else 0) + (if (vm.chatError != null) 1 else 0)
-    LaunchedEffect(msgs.size, vm.thinking, vm.chatError) {
+    val extra = (if (thinking) 1 else 0) + (if (error != null) 1 else 0)
+    LaunchedEffect(msgs.size, thinking, error) {
         val n = msgs.size + extra
         if (n > 0) listState.animateScrollToItem(n - 1)
     }
 
     fun send(t: String) {
         val s = t.trim()
-        if (s.isEmpty() || vm.thinking) return
+        if (s.isEmpty() || thinking) return
         input = ""
-        vm.sendChat(s)
+        onSend(s)
     }
+    val lastAssistant = msgs.indexOfLast { it.role == "assistant" }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Caption("Coach")
             Spacer(Modifier.weight(1f))
-            if (msgs.isNotEmpty()) TextButton(onClick = { vm.clearChat() }) { Text("Clear chat") }
+            if (msgs.isNotEmpty()) TextButton(onClick = onClear) { Text("Clear chat") }
         }
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
-        if (msgs.isEmpty() && !vm.thinking) {
+        if (msgs.isEmpty() && !thinking) {
             Column(Modifier.weight(1f).fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.Center) {
                 Text("Ask about your training, sleep or recovery.", style = MaterialTheme.typography.bodyLarge, color = dim)
                 Spacer(Modifier.height(20.dp))
@@ -86,7 +108,7 @@ fun CoachScreen(vm: MainViewModel) {
                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                items(msgs) { m ->
+                itemsIndexed(msgs) { idx, m ->
                     when (m.role) {
                         "user" -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                             Text(
@@ -97,15 +119,22 @@ fun CoachScreen(vm: MainViewModel) {
                             )
                         }
                         "note" -> Text(m.text, style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic), color = dim)
-                        else -> Text(renderMarkdown(m.text), style = MaterialTheme.typography.bodyLarge)
+                        else -> {
+                            val a = AnswerParser.fromJson(m.json)
+                            if (a != null) CoachAnswerCard(
+                                answer = a, trace = m.trace, truncated = m.truncated,
+                                canExplain = onExplain != null && idx == lastAssistant && !m.long && !thinking,
+                                onExplain = { onExplain?.invoke() }, onFollowUp = { send(it) }, onContinue = onContinue,
+                            ) else Text(renderMarkdown(m.text), style = MaterialTheme.typography.bodyLarge)
+                        }
                     }
                 }
-                if (vm.thinking) item { Text("thinking…", style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic), color = dim) }
-                vm.chatError?.let { e ->
+                if (thinking) item { Text(status ?: "thinking…", style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic), color = dim) }
+                error?.let { e ->
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(e, style = MaterialTheme.typography.bodySmall, color = dim, modifier = Modifier.weight(1f, fill = false))
-                            TextButton(onClick = { vm.retryChat() }) { Text("Retry") }
+                            TextButton(onClick = { onRetry() }) { Text("Retry") }
                         }
                     }
                 }
@@ -121,7 +150,7 @@ fun CoachScreen(vm: MainViewModel) {
                 keyboardActions = KeyboardActions(onSend = { send(input) }),
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { send(input) }, enabled = input.isNotBlank() && !vm.thinking) { Text("Send") }
+            TextButton(onClick = { send(input) }, enabled = input.isNotBlank() && !thinking) { Text("Send") }
         }
     }
 }

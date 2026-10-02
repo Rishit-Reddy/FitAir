@@ -23,6 +23,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.fitair.app.secure.SecretStore
+import com.fitair.app.ui.coach.CoachVm
+import com.fitair.app.ui.settings.SettingsScreen
+import com.fitair.app.ui.theme.FitAirTheme
+import com.fitair.app.ui.theme.ThemeMode
+import com.fitair.app.ui.today.TodayScreen
+import com.fitair.app.ui.today.TodayVm
 import java.io.IOException
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -32,10 +39,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var themeMode by mutableStateOf(ThemeMode.fromKey(prefs.getString("theme", null))); private set
     var sdkStatus by mutableStateOf(HealthConnectClient.SDK_UNAVAILABLE); private set
     var permsGranted by mutableStateOf<Boolean?>(null); private set
-
-    var stats by mutableStateOf<TodayStats?>(null); private set
-    var loading by mutableStateOf(false); private set
-    var error by mutableStateOf<String?>(null); private set
 
     var probeRows by mutableStateOf<List<ProbeRow>>(emptyList()); private set
     var probing by mutableStateOf(false); private set
@@ -52,68 +55,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
     var dbSizeBytes by mutableStateOf(0L); private set
 
-    // ---- google drive ----
-    var driveConnected by mutableStateOf(prefs.getBoolean(DrivePrefs.CONNECTED, false)); private set
-    var driveLastMs by mutableStateOf(0L); private set
-    var driveSizeBytes by mutableStateOf(0L); private set
-    var driveFailedBefore by mutableStateOf(false); private set
-    var driveState by mutableStateOf(BackupState()); private set
-
-    /** Backup progress as shown in Settings: live state, or a remembered failure after a process restart. */
-    val driveShown: BackupState get() =
-        if (driveState.phase == BackupPhase.Idle && driveFailedBefore) BackupState(BackupPhase.Failed, 0) else driveState
-
-    private fun loadDrive() {
-        driveConnected = prefs.getBoolean(DrivePrefs.CONNECTED, false)
-        driveLastMs = prefs.getLong(DrivePrefs.LAST, 0L)
-        driveSizeBytes = prefs.getLong(DrivePrefs.SIZE, 0L)
-        driveFailedBefore = prefs.getBoolean(DrivePrefs.FAILED, false)
-    }
-    private val driveListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
-        if (k?.startsWith("drive_") == true) loadDrive()
-    }
-
-    /** Starts authorization; [launch] is called if Google needs to show a consent screen. */
-    fun connectDrive(launch: (androidx.activity.result.IntentSenderRequest) -> Unit) {
-        viewModelScope.launch {
-            AppLog.d("drive: connect tapped")
-            when (val a = DriveAuth.authorize(getApplication())) {
-                is DriveAuth.NeedsResolution -> {
-                    AppLog.d("drive: launching consent screen")
-                    launch(androidx.activity.result.IntentSenderRequest.Builder(a.intent).build())
-                }
-                is DriveAuth.Token -> onDriveConnected()
-                is DriveAuth.Failed -> {
-                    AppLog.e("drive: connect failed", a.error)
-                }
-            }
-        }
-    }
-
-    fun onDriveResult(data: android.content.Intent?) {
-        try {
-            val r = com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(getApplication())
-                .getAuthorizationResultFromIntent(data)
-            if (r.accessToken != null) onDriveConnected() else AppLog.d("drive: consent returned no token")
-        } catch (e: Exception) {
-            AppLog.e("drive: consent cancelled/failed", e)
-        }
-    }
-
-    private fun onDriveConnected() {
-        AppLog.d("drive: connected")
-        prefs.edit().putBoolean(DrivePrefs.CONNECTED, true).putBoolean(DrivePrefs.FAILED, false).apply()
-        DriveScheduler.schedulePeriodic(getApplication())
-        backUpNow()
-    }
-
-    fun backUpNow() {
-        AppLog.d("drive: Back up now tapped")
-        DriveBackup.markQueued()
-        DriveScheduler.backupNow(getApplication())
-    }
-
-    // ---- coach chat ----
+    // ---- coach chat (legacy path; the Coach tab now uses ui.coach.CoachVm, remove with CoachScreen(MainViewModel)) ----
     private val coachRepo = CoachRepo(app)
     var chat by mutableStateOf(ChatStore.load(app)); private set
     var thinking by mutableStateOf(false); private set
@@ -161,35 +103,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearChat() { AppLog.d("coach: chat cleared"); ChatStore.clear(getApplication()); chat = emptyList(); chatError = null }
 
-    // ---- readiness ----
-    var readinessScore by mutableStateOf<String?>(null); private set
-    var readinessNote by mutableStateOf<String?>(null); private set
-    var readinessOffline by mutableStateOf(false); private set
-
-    fun loadReadiness() {
-        viewModelScope.launch {
-            try {
-                val j = withContext(Dispatchers.IO) {
-                    ServerApi.get(getApplication(), "/readiness?date=${java.time.LocalDate.now()}")
-                }
-                val sc = j.opt("score")
-                readinessScore = if (sc is Number) Math.round(sc.toDouble()).toString() else null
-                val notes = j.optJSONArray("notes")
-                readinessNote = notes?.optString(0)?.takeIf { it.isNotBlank() }
-                readinessOffline = false
-            } catch (e: Exception) {
-                AppLog.d("readiness failed: ${e.message}")
-                readinessScore = null; readinessNote = null; readinessOffline = true
-            }
-        }
-    }
-
     init {
-        loadDrive()
-        prefs.registerOnSharedPreferenceChangeListener(driveListener)
-        if (driveConnected) DriveScheduler.schedulePeriodic(app)
-        viewModelScope.launch { DriveBackup.state.collect { driveState = it; loadDrive() } }
+        // Drive backup is owned by BackupSection; only make sure the periodic job exists once connected.
+        if (prefs.getBoolean(DrivePrefs.CONNECTED, false)) DriveScheduler.schedulePeriodic(app)
         SyncScheduler.schedulePeriodic(app)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { DailyMetrics.migrateIfNeeded(app) }.onFailure { AppLog.e("readiness v2 migration failed", it) }
+        }
         viewModelScope.launch {
             SyncScheduler.nowFlow(app).collect { infos ->
                 syncing = infos.any { !it.state.isFinished }
@@ -212,25 +132,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (sdkStatus != HealthConnectClient.SDK_AVAILABLE) return
         viewModelScope.launch {
             try {
-                val ok = repo.hasAllPermissions()
-                permsGranted = ok
-                if (ok && stats == null) refresh()
+                permsGranted = repo.hasAllPermissions()
             } catch (e: Exception) {
                 permsGranted = false
-                error = e.message
+                AppLog.e("permission check failed", e)
             }
         }
     }
 
     fun onPermissionResult() = checkStatus()
-
-    fun refresh() {
-        viewModelScope.launch {
-            loading = true; error = null
-            try { stats = repo.today() } catch (e: Exception) { error = e.message ?: e.toString() }
-            loading = false
-        }
-    }
 
     fun runProbe() {
         viewModelScope.launch {
@@ -266,6 +176,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AppLog.init(applicationContext)
         AppLog.d("app opened")
+        SecretStore.migrateFromPrefs(applicationContext)
         setContent {
             val vm: MainViewModel = viewModel()
             FitAirTheme(vm.themeMode) {
@@ -273,9 +184,6 @@ class MainActivity : ComponentActivity() {
                     val launcher = rememberLauncherForActivityResult(
                         PermissionController.createRequestPermissionResultContract()
                     ) { vm.onPermissionResult() }
-                    val driveLauncher = rememberLauncherForActivityResult(
-                        androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
-                    ) { vm.onDriveResult(it.data) }
                     LaunchedEffect(Unit) { vm.checkStatus() }
 
                     when {
@@ -283,7 +191,7 @@ class MainActivity : ComponentActivity() {
                             HealthConnectMissingScreen(vm.sdkStatus == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED)
                         vm.permsGranted == null -> LoadingScreen()
                         vm.permsGranted == false -> GrantAccessScreen { launcher.launch(HealthPerms.all) }
-                        else -> MainContent(vm) { vm.connectDrive { driveLauncher.launch(it) } }
+                        else -> MainContent(vm)
                     }
                 }
             }
@@ -292,9 +200,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun MainContent(vm: MainViewModel, onConnectDrive: () -> Unit) {
-    val tabs = listOf("Today", "Coach", "Log", "Data", "Settings")
+private fun MainContent(vm: MainViewModel) {
+    val tabs = listOf("Today", "Coach", "Log", "Settings")
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val todayVm: TodayVm = viewModel()
+    val coachVm: CoachVm = viewModel()
     Scaffold(
         modifier = Modifier.imePadding(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -317,11 +227,10 @@ private fun MainContent(vm: MainViewModel, onConnectDrive: () -> Unit) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(vm)
-                1 -> CoachScreen(vm)
+                0 -> TodayScreen(todayVm)
+                1 -> CoachScreen(coachVm)
                 2 -> LogScreen(vm)
-                3 -> DataScreen(vm)
-                else -> SettingsScreen(vm, onConnectDrive)
+                else -> SettingsScreen(vm)
             }
         }
     }

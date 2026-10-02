@@ -6,14 +6,17 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
-/** Local SQLite copy of the health data. Record shapes follow server/API.md. */
+/** Local SQLite copy of the health data plus the app tables (schema v3, see docs/ARCHITECTURE.md 3.2). */
 class LocalStore private constructor(private val ctx: Context) :
-    SQLiteOpenHelper(ctx.applicationContext, FILE, null, 2) {
+    SQLiteOpenHelper(ctx.applicationContext, FILE, null, VERSION) {
 
     val db: SQLiteDatabase get() = writableDatabase
 
     companion object {
         const val FILE = "fitair.db"
+        const val VERSION = 3
+        /** Tables added in schema v3 (not part of the sync/backup health tables in [TABLES]). */
+        val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg")
         val TABLES = listOf(
             "heart_rate", "steps", "distance", "total_calories", "resting_hr",
             "hrv", "respiratory_rate", "sleep", "sleep_stage", "exercise",
@@ -58,6 +61,7 @@ class LocalStore private constructor(private val ctx: Context) :
         )
         s.forEach { db.execSQL(it) }
         createV2(db)
+        createV3(db)
         // fresh install: nothing to migrate
         db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES('$MIG_DONE','1')")
     }
@@ -68,10 +72,43 @@ class LocalStore private constructor(private val ctx: Context) :
         db.execSQL("CREATE TABLE IF NOT EXISTS daily_metrics(date TEXT PRIMARY KEY, tz TEXT, computed_ms INTEGER, readiness REAL, readiness_json TEXT, sleep_score REAL, sleep_json TEXT, load_trimp REAL, acute_load REAL, chronic_load REAL, acwr REAL, rhr REAL, hrv REAL, sleep_min INTEGER, steps INTEGER, insights_json TEXT)")
     }
 
+    /**
+     * Tables for the planned features (calendar cache, tasks, check-in, plan log, prefs, AI telemetry, chat).
+     * Created now so later phases need no migration. All IF NOT EXISTS; upgrades only ever add.
+     */
+    private fun createV3(db: SQLiteDatabase) {
+        val s = listOf(
+            "CREATE TABLE IF NOT EXISTS cal_event(instance_id INTEGER PRIMARY KEY, event_id INTEGER, cal_id INTEGER, title TEXT, " +
+                "begin_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, all_day INTEGER NOT NULL, busy INTEGER NOT NULL, fetched_ms INTEGER NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS idx_cal_begin ON cal_event(begin_ms)",
+            "CREATE TABLE IF NOT EXISTS task(id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT, due_date TEXT, est_min INTEGER, " +
+                "status TEXT NOT NULL DEFAULT 'open', created_ms INTEGER NOT NULL, done_ms INTEGER, source TEXT NOT NULL DEFAULT 'local', updated_ms INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS checkin(date TEXT PRIMARY KEY, energy INTEGER, soreness INTEGER, mood INTEGER, stress INTEGER, " +
+                "note TEXT, created_ms INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS plan_item(id TEXT PRIMARY KEY, date TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER, end_ms INTEGER, " +
+                "title TEXT NOT NULL, reason TEXT NOT NULL, intensity TEXT, source TEXT NOT NULL, inputs_json TEXT NOT NULL, status TEXT NOT NULL, " +
+                "dismiss_reason TEXT, created_ms INTEGER NOT NULL, decided_ms INTEGER)",
+            "CREATE INDEX IF NOT EXISTS idx_plan_date ON plan_item(date)",
+            "CREATE TABLE IF NOT EXISTS pref(k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS ai_call(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, task TEXT NOT NULL, provider TEXT, model TEXT, " +
+                "rounds INTEGER, in_tok INTEGER, out_tok INTEGER, thought_tok INTEGER, cached_tok INTEGER, latency_ms INTEGER, ok INTEGER, finish TEXT, error TEXT)",
+            "CREATE TABLE IF NOT EXISTS chat_msg(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, role TEXT, text TEXT, json TEXT)",
+        )
+        s.forEach { db.execSQL(it) }
+    }
+
     /** Cheap schema-only upgrade; the heavy heart-rate rebuild runs later in [migrateHeartRate] (IO thread). */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2(db)
+        if (oldVersion < 3) createV3(db)
+        // never drop anything here
     }
+
+    /** Value stored under [k] in the meta table, or null. */
+    fun metaGet(k: String): String? =
+        db.rawQuery("SELECT v FROM meta WHERE k=?", arrayOf(k)).use { if (it.moveToFirst()) it.getString(0) else null }
+
+    fun metaSet(k: String, v: String) = db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)", arrayOf(k, v))
 
     private fun meta(k: String): Boolean =
         db.rawQuery("SELECT 1 FROM meta WHERE k=?", arrayOf(k)).use { it.moveToFirst() }
@@ -197,7 +234,7 @@ class LocalStore private constructor(private val ctx: Context) :
         return out
     }
 
-    /** One transaction, INSERT OR REPLACE. [records] use server/API.md JSON shapes. */
+    /** One transaction, INSERT OR REPLACE. [records] are JSON objects: t/bpm/origin, start/end/count, etc. (see HealthRepo.readForSync). */
     fun upsert(type: String, records: List<JSONObject>) {
         if (records.isEmpty()) return
         val d = db

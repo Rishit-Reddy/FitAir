@@ -1,6 +1,9 @@
 package com.fitair.app
 
 import android.content.Context
+import com.fitair.app.analytics.ReadinessMath
+import com.fitair.app.analytics.SleepMath
+import com.fitair.app.core.Num
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
@@ -18,7 +21,8 @@ import java.util.Locale
  *  - load: Banister TRIMP per exercise (male coefficients 0.64 * e^(1.92 * HRr)) integrated over the in-window heart rate,
  *    HRr = (HR - rest) / (HRmax - rest), rest = mean resting HR of the prior 28 days (60 if unknown).
  *    acute = EWMA 7 d, chronic = EWMA 28 d, acwr = acute / chronic (null if chronic < 1 or < 14 days of history).
- *  - readiness: LocalApi.readiness with extra sleep_quality + acwr components; frozen for days older than 2 days.
+ *  - readiness v2: see ReadinessMath (sleep score, HRV, resting HR, ACWR load, check-in), version stored in readiness_json;
+ *    rows are frozen for days older than 2 days, except the one-time v2 recompute ([migrateIfNeeded]).
  *  - insights: conservative rules, suppressed with < 7 days of history. Not medical advice.
  */
 object DailyMetrics {
@@ -27,7 +31,9 @@ object DailyMetrics {
     private const val MIN_HISTORY = 14
     private const val MIN_BASE = 7
     private const val STALE_MS = 10 * 60_000L
-    private val SLEEP_W = linkedMapOf("duration" to 0.40, "efficiency" to 0.25, "restorative" to 0.20, "consistency" to 0.15)
+    private val SLEEP_W = SleepMath.WEIGHTS
+    private const val MIG_READINESS_V2 = "readiness_v2_done"
+    private const val MIG_DAYS = 120
 
     fun stored(ctx: Context, date: String): JSONObject? = LocalStore.get(ctx).getDaily(date, date).firstOrNull()
 
@@ -43,6 +49,17 @@ object DailyMetrics {
     fun recomputeRecent(ctx: Context, days: Int) {
         val today = LocalDate.now(ZoneId.systemDefault())
         computeDates(ctx, (days.coerceAtLeast(1) - 1 downTo 0).map { today.minusDays(it.toLong()) }, false)
+    }
+
+    /** One-time (meta flag) forced recompute of the last 120 days after the readiness v2 change. Call from an IO thread. */
+    @Synchronized
+    fun migrateIfNeeded(ctx: Context) {
+        val store = LocalStore.get(ctx)
+        if (store.metaGet(MIG_READINESS_V2) != null) return
+        val today = LocalDate.now(ZoneId.systemDefault())
+        AppLog.d("readiness v2: recomputing last $MIG_DAYS days")
+        computeDates(ctx, (MIG_DAYS - 1 downTo 0).map { today.minusDays(it.toLong()) }, true)
+        store.metaSet(MIG_READINESS_V2, ReadinessMath.VERSION.toString())
     }
 
     /** Fills missing rows in [from, to] and refreshes rows of the last 2 days when older than 10 min. */
@@ -102,7 +119,7 @@ object DailyMetrics {
         val ld = loads[d.toString()]
         val acwr = if (ld != null && ld.history >= MIN_HISTORY && ld.chronic >= CHRONIC_EPS) ld.acute / ld.chronic else null
         val (sleepScore, sleepJson) = sleepScore(c, d)
-        val extras = LocalApi.Extras(sleepScore, acwr, ld?.acute, ld?.chronic)
+        val extras = LocalApi.Extras(sleepScore, acwr, ld?.acute, ld?.chronic, checkinMean(c, d))
         val ready = LocalApi.readiness(c.ser, d, c.mh, extras)
         val insights = insights(c, d, ld, acwr, sleepJson)
         return JSONObject()
@@ -115,6 +132,14 @@ object DailyMetrics {
             .put("sleep_min", LocalApi.j(day.sleepMin?.let { Math.round(it) })).put("steps", day.steps)
             .put("insights_json", insights.toString())
     }
+
+    /** Mean of the day's check-in answers (1..5, 5 = best), or null without a check-in. */
+    private fun checkinMean(c: Ctx, d: LocalDate): Double? = try {
+        c.db.rawQuery("SELECT energy, soreness, mood, stress FROM checkin WHERE date=?", arrayOf(d.toString())).use { cur ->
+            if (!cur.moveToFirst()) null
+            else (0..3).filter { !cur.isNull(it) }.map { cur.getDouble(it) }.let { Num.mean(it) }
+        }
+    } catch (e: Exception) { null }
 
     // ---------- training load ----------
 
@@ -190,11 +215,7 @@ object DailyMetrics {
         return if (m >= 720) m - 1440 else m
     }
 
-    private fun sd(v: List<Double>): Double {
-        if (v.size < 2) return 0.0
-        val m = v.average()
-        return Math.sqrt(v.sumOf { (it - m) * (it - m) } / (v.size - 1))
-    }
+    private fun sd(v: List<Double>): Double = Num.sd(v)
 
     private fun sleepScore(c: Ctx, d: LocalDate): Pair<Double?, JSONObject> {
         val day = c.day(d)!!
@@ -203,7 +224,7 @@ object DailyMetrics {
         val o = JSONObject()
         val asleep = day.sleepMin
         val typical = (1..28).mapNotNull { c.day(d.minusDays(it.toLong()))?.sleepMin }.let { if (it.size >= MIN_BASE) it.average() else null }
-        val need = if (typical != null) (450.0 + 0.5 * (typical - 450.0)).coerceIn(360.0, 540.0) else 450.0
+        val need = SleepMath.need(typical)
         val debtDays = (0..6).mapNotNull { c.day(d.minusDays(it.toLong()))?.sleepMin }
         val debt = debtDays.sumOf { maxOf(0.0, need - it) }
         o.put("need_min", LocalApi.r(need)).put("typical_28d_min", jn(typical, 1))
@@ -218,7 +239,7 @@ object DailyMetrics {
             scores[k] = sc
             comps.put(k, extra.put("score", sc).put("weight", SLEEP_W[k]))
         }
-        add("duration", asleep / need * 100, JSONObject().put("asleep_min", asleep).put("need_min", LocalApi.r(need)))
+        add("duration", SleepMath.durationScore(asleep, need), JSONObject().put("asleep_min", asleep).put("need_min", LocalApi.r(need)))
         notes.add(String.format(Locale.US, "Slept %.1f h vs need %.1f h%s.", asleep / 60, need / 60,
             if (typical != null) " (adapted to your 28-day typical)" else " (default need; adapts after 7 nights of history)"))
 
@@ -227,11 +248,11 @@ object DailyMetrics {
         val deep = st["deep"] ?: 0.0; val rem = st["rem"] ?: 0.0
         val staged = st.containsKey("light") || st.containsKey("deep") || st.containsKey("rem")
         if (staged) {
-            val eff = asleep / (asleep + awake)
-            add("efficiency", (eff - 0.65) / 0.25 * 100, JSONObject().put("efficiency", LocalApi.r(eff, 3)).put("awake_min", LocalApi.r(awake)))
+            val eff = SleepMath.efficiency(asleep, awake)
+            add("efficiency", SleepMath.efficiencyScore(eff), JSONObject().put("efficiency", LocalApi.r(eff, 3)).put("awake_min", LocalApi.r(awake)))
             if (st.containsKey("deep") || st.containsKey("rem")) {
-                val prop = (deep + rem) / asleep
-                add("restorative", prop / 0.38 * 100, JSONObject().put("deep_rem_fraction", LocalApi.r(prop, 3))
+                val prop = SleepMath.restorativeFraction(deep, rem, asleep)
+                add("restorative", SleepMath.restorativeScore(prop), JSONObject().put("deep_rem_fraction", LocalApi.r(prop, 3))
                     .put("deep_min", LocalApi.r(deep)).put("rem_min", LocalApi.r(rem)))
             } else notes.add("Restorative skipped: no deep/REM stages.")
         } else notes.add("Efficiency and restorative skipped: no sleep stages for this night.")
@@ -239,13 +260,11 @@ object DailyMetrics {
         val mids = (0..6).mapNotNull { midpoint(c, d.minusDays(it.toLong())) }
         if (mids.size >= 4) {
             val s = sd(mids)
-            add("consistency", 100 - (s - 20) / 70 * 100, JSONObject().put("midpoint_sd_min", LocalApi.r(s)).put("nights", mids.size))
+            add("consistency", SleepMath.consistencyScore(s), JSONObject().put("midpoint_sd_min", LocalApi.r(s)).put("nights", mids.size))
         } else notes.add("Consistency skipped: needs >= 4 nights with sleep in the last 7 days.")
 
-        val wsum = scores.keys.sumOf { SLEEP_W[it]!! }
-        val total = scores.entries.sumOf { SLEEP_W[it.key]!! * it.value } / wsum
         if (debt > 0) notes.add(String.format(Locale.US, "Sleep debt over the last %d nights with data: %.1f h.", debtDays.size, debt / 60))
-        val score = LocalApi.r(total, 1)
+        val score = SleepMath.combine(scores)
         o.put("score", LocalApi.j(score)).put("components", comps).put("notes", JSONArray(notes))
         return score to o
     }

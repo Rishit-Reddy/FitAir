@@ -5,6 +5,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import androidx.core.app.NotificationCompat
+import com.fitair.app.backup.BackupCrypto
+import com.fitair.app.backup.BackupFiles
+import com.fitair.app.backup.NeedsPassphraseException
+import com.fitair.app.backup.WrongPassphraseException
 import androidx.work.*
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
@@ -13,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -37,6 +42,10 @@ object DrivePrefs {
     const val LAST = "drive_last_ms"
     const val SIZE = "drive_size_bytes"
     const val FAILED = "drive_failed"
+    /** Comma list of closed years that are uploaded for the last time, e.g. "2024,2025". */
+    const val FROZEN = "drive_frozen_years"
+    /** "<year>:<bytes>,..." of the last upload per year. */
+    const val SIZES = "drive_year_sizes"
 }
 
 sealed class DriveAuth {
@@ -68,30 +77,62 @@ sealed class DriveAuth {
 private class DriveAuthException : IOException("401 unauthorized")
 private class DriveRetryException(msg: String) : IOException(msg)
 
-enum class BackupPhase { Idle, Preparing, Compressing, Uploading, Done, Failed }
+enum class BackupPhase { Idle, Preparing, Compressing, Uploading, Done, Failed, Downloading, Restoring }
 
-data class BackupState(val phase: BackupPhase = BackupPhase.Idle, val pct: Int = 0)
+/** [pct] is overall progress 0..100; [detail] is a short human hint such as "2025" or "2024 - part 2". */
+data class BackupState(val phase: BackupPhase = BackupPhase.Idle, val pct: Int = 0, val detail: String = "")
 
 /**
- * One WhatsApp-style backup: FitAir-backup.zip (fitair.db snapshot + backup.json) at the root of My Drive,
- * overwritten in place via a resumable upload. Progress is published on [state] (process-wide).
+ * Per-year Drive backups: FitAir-backup-<year>.zip (VACUUM INTO snapshot holding only that year's rows + backup.json), at the root of
+ * My Drive. Only the current year is re-uploaded; a closed year is uploaded one last time, then frozen. A year over 200 MB is split
+ * into FitAir-backup-<year>-2.zip, ... Optional passphrase encryption (BackupCrypto) wraps each zip. Restore merges every
+ * FitAir-backup-*.zip into the live database. Progress is published on [state] (process-wide).
  */
 object DriveBackup {
-    const val FILE_NAME = "FitAir-backup.zip"
+    /** The single-file name used before per-year backups; still listed and restorable. */
+    const val LEGACY_NAME = "FitAir-backup.zip"
+    private val NAME_RE = Regex("^FitAir-backup(-\\d{4}(-\\d+)?)?\\.zip$")
     private const val API = "https://www.googleapis.com/drive/v3/files"
     private const val UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
     private const val CHUNK = 6 * 1024 * 1024 // multiple of 256 KiB as Drive requires
     private const val MAX_CHUNK_RETRIES = 5
     private val lock = Mutex()
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
     private val _state = MutableStateFlow(BackupState())
     val state: StateFlow<BackupState> = _state
 
+    /** One-shot message for the UI after a restore or a failure ("Restored 3 files", "Wrong passphrase"). */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice
+    fun clearNotice() { _notice.value = null }
+
     fun markQueued() { if (!isRunning()) _state.value = BackupState(BackupPhase.Preparing, 0) }
-    private fun isRunning() = _state.value.phase.let { it == BackupPhase.Preparing || it == BackupPhase.Compressing || it == BackupPhase.Uploading }
-    private fun set(p: BackupPhase, pct: Int) { _state.value = BackupState(p, pct.coerceIn(0, 100)) }
+    private fun isRunning() = _state.value.phase.let {
+        it == BackupPhase.Preparing || it == BackupPhase.Compressing || it == BackupPhase.Uploading ||
+            it == BackupPhase.Downloading || it == BackupPhase.Restoring
+    }
+    private fun set(p: BackupPhase, pct: Int, detail: String = "") { _state.value = BackupState(p, pct.coerceIn(0, 100), detail) }
 
     enum class Outcome { Ok, Skipped, Retry, Failed }
+
+    // ---- connect (moved here from MainViewModel so BackupSection is self-contained) ----
+
+    /** Marks Drive connected and schedules the daily backup. */
+    fun onConnected(ctx: Context) {
+        val prefs = ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(DrivePrefs.CONNECTED, true).putBoolean(DrivePrefs.FAILED, false).apply()
+        DriveScheduler.schedulePeriodic(ctx)
+    }
+
+    // ---------- backup ----------
+
+    private fun frozen(prefs: android.content.SharedPreferences): Set<Int> =
+        (prefs.getString(DrivePrefs.FROZEN, "") ?: "").split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+    private fun sizes(prefs: android.content.SharedPreferences): MutableMap<String, Long> =
+        (prefs.getString(DrivePrefs.SIZES, "") ?: "").split(',').filter { ':' in it }
+            .associate { it.substringBefore(':') to (it.substringAfter(':').toLongOrNull() ?: 0L) }.toMutableMap()
 
     /** Best-effort; never throws (except coroutine cancellation). */
     suspend fun run(ctx: Context): Outcome = withContext(Dispatchers.IO) {
@@ -101,12 +142,11 @@ object DriveBackup {
             return@withContext Outcome.Skipped
         }
         if (!lock.tryLock()) { AppLog.d("backup: already running"); return@withContext Outcome.Skipped }
-        val snap = File(ctx.cacheDir, "fitair-snapshot.db")
-        val zip = File(ctx.cacheDir, "fitair-backup.zip.tmp")
+        val full = File(ctx.cacheDir, "fitair-snapshot.db")
         try {
             val t0 = System.currentTimeMillis()
             set(BackupPhase.Preparing, 0)
-            snap.delete(); zip.delete()
+            full.delete()
             when (val a = DriveAuth.authorize(ctx)) {
                 is DriveAuth.NeedsResolution -> {
                     AppLog.d("backup: authorization needs user resolution")
@@ -119,14 +159,10 @@ object DriveBackup {
                     set(BackupPhase.Failed, 0); Outcome.Retry
                 }
                 is DriveAuth.Token -> try {
-                    snapshot(ctx, snap)
-                    buildZip(ctx, snap, zip)
-                    snap.delete()
-                    upload(a.token, zip)
-                    prefs.edit().putLong(DrivePrefs.LAST, System.currentTimeMillis()).putLong(DrivePrefs.SIZE, zip.length())
-                        .putBoolean(DrivePrefs.FAILED, false).apply()
+                    val total = backupAll(ctx, prefs, a.token, full)
+                    prefs.edit().putLong(DrivePrefs.LAST, System.currentTimeMillis()).putBoolean(DrivePrefs.FAILED, false).apply()
                     set(BackupPhase.Done, 100)
-                    AppLog.d("backup: finished OK in ${System.currentTimeMillis() - t0} ms (${zip.length()} B)")
+                    AppLog.d("backup: finished OK in ${System.currentTimeMillis() - t0} ms ($total B uploaded)")
                     Outcome.Ok
                 } catch (e: DriveAuthException) {
                     AppLog.e("backup: token rejected (401)", e)
@@ -142,12 +178,62 @@ object DriveBackup {
                 }
             }
         } finally {
-            snap.delete(); zip.delete()
+            full.delete()
             lock.unlock()
         }
     }
 
-    // ---------- snapshot + zip ----------
+    /** Snapshot, then per year: build zip part(s), (encrypt,) upload, and freeze closed years. Returns bytes uploaded. */
+    private suspend fun backupAll(ctx: Context, prefs: android.content.SharedPreferences, token: String, full: File): Long {
+        val zone = java.time.ZoneId.systemDefault()
+        val thisYear = java.time.LocalDate.now(zone).year
+        snapshot(ctx, full)
+        val data = BackupFiles.yearsWithData(full, zone)
+        val first = data.minOrNull() ?: thisYear
+        val frozen = frozen(prefs).toMutableSet()
+        val todo = (first..thisYear).filter { it == thisYear || it !in frozen }
+        val key = BackupCrypto.loadKey(ctx).takeIf { BackupCrypto.isEnabled(ctx) }
+        val sz = sizes(prefs)
+        var uploaded = 0L
+        todo.forEachIndexed { yi, year ->
+            val base = yi * 100 / todo.size; val span = 100f / todo.size
+            val detail = year.toString()
+            set(BackupPhase.Compressing, base, detail)
+            val parts = BackupFiles.buildYear(ctx, full, year, zone, ctx.cacheDir) { f -> set(BackupPhase.Compressing, base + (span * 0.3f * f).toInt(), detail) }
+            try {
+                var yearBytes = 0L
+                parts.forEachIndexed { pi, part ->
+                    val name = if (part.index == 1) "FitAir-backup-$year.zip" else "FitAir-backup-$year-${part.index}.zip"
+                    var file = part.zip
+                    if (key != null) {
+                        val enc = File(ctx.cacheDir, "fitair-backup-enc.tmp")
+                        BackupCrypto.encrypt(part.zip, enc, key)
+                        part.zip.delete(); file = enc
+                    }
+                    upload(token, file, name) { f ->
+                        val within = (pi + f) / parts.size
+                        set(BackupPhase.Uploading, base + (span * (0.3f + 0.7f * within)).toInt(), detail + if (parts.size > 1) " - part ${part.index}" else "")
+                    }
+                    yearBytes += file.length(); uploaded += file.length()
+                    file.delete()
+                }
+                sz[year.toString()] = yearBytes
+                prefs.edit().putString(DrivePrefs.SIZES, sz.entries.joinToString(",") { "${it.key}:${it.value}" }).apply()
+                if (year < thisYear) {
+                    frozen.add(year)
+                    prefs.edit().putString(DrivePrefs.FROZEN, frozen.sorted().joinToString(",")).apply()
+                    AppLog.d("backup: year $year frozen")
+                }
+            } finally {
+                parts.forEach { it.zip.delete() }
+                File(ctx.cacheDir, "fitair-backup-enc.tmp").delete()
+            }
+        }
+        prefs.edit().putLong(DrivePrefs.SIZE, sz.values.sum()).apply()
+        return uploaded
+    }
+
+    // ---------- snapshot ----------
 
     /** Consistent copy of the DB: VACUUM INTO, else WAL checkpoint + file copy. */
     private fun snapshot(ctx: Context, out: File) {
@@ -164,35 +250,107 @@ object DriveBackup {
         }
     }
 
-    private fun buildZip(ctx: Context, snap: File, zip: File) {
-        set(BackupPhase.Compressing, 0)
-        val store = LocalStore.get(ctx)
-        val appVersion = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: ""
-        val meta = JSONObject().put("version", 2).put("created_ms", System.currentTimeMillis())
-            .put("app_version", appVersion).put("db_version", store.db.version)
-            .put("row_counts", JSONObject(store.counts() as Map<*, *>)).toString()
-        val total = maxOf(snap.length(), 1L)
-        var done = 0L
-        ZipOutputStream(zip.outputStream().buffered(64 * 1024)).use { z ->
-            z.setLevel(Deflater.DEFAULT_COMPRESSION)
-            z.putNextEntry(ZipEntry("fitair.db"))
-            snap.inputStream().use { ins ->
-                val buf = ByteArray(64 * 1024)
-                var lastPct = -1
-                while (true) {
-                    val n = ins.read(buf)
-                    if (n < 0) break
-                    z.write(buf, 0, n); done += n
-                    val p = (done * 100 / total).toInt()
-                    if (p != lastPct) { lastPct = p; set(BackupPhase.Compressing, p * 30 / 100) }
+    // ---------- restore ----------
+
+    /** Starts a restore on a process-wide scope (survives leaving the screen). Result arrives via [state] and [notice]. */
+    fun restoreAsync(ctx: Context, passphrase: String) {
+        val app = ctx.applicationContext
+        if (isRunning()) return
+        set(BackupPhase.Downloading, 0)
+        scope.launch { restore(app, passphrase) }
+    }
+
+    private class RemoteFile(val id: String, val name: String, val size: Long)
+
+    private suspend fun restore(ctx: Context, passphrase: String) {
+        AppLog.init(ctx)
+        if (!lock.tryLock()) { AppLog.d("restore: backup running"); return }
+        val dl = File(ctx.cacheDir, "fitair-restore.tmp")
+        val dec = File(ctx.cacheDir, "fitair-restore-dec.tmp")
+        val snap = File(ctx.cacheDir, "fitair-restore.db")
+        try {
+            val token = when (val a = DriveAuth.authorize(ctx)) {
+                is DriveAuth.Token -> a.token
+                else -> { _notice.value = "Reconnect Google Drive first"; set(BackupPhase.Failed, 0); return }
+            }
+            val files = listBackups(token)
+            if (files.isEmpty()) { _notice.value = "No FitAir backups found in Google Drive"; set(BackupPhase.Idle, 0); return }
+            var rows = 0L
+            files.forEachIndexed { i, f ->
+                val base = i * 100 / files.size; val span = 100f / files.size
+                val detail = f.name.removePrefix("FitAir-backup").removeSuffix(".zip").trim('-').ifEmpty { "legacy" }
+                dl.delete(); dec.delete(); snap.delete()
+                download(token, f, dl) { fr -> set(BackupPhase.Downloading, base + (span * 0.7f * fr).toInt(), detail) }
+                set(BackupPhase.Restoring, base + (span * 0.7f).toInt(), detail)
+                var zip = dl
+                if (BackupCrypto.isEncrypted(dl)) {
+                    if (passphrase.isEmpty()) throw NeedsPassphraseException()
+                    BackupCrypto.decrypt(dl, dec, passphrase); zip = dec
+                }
+                BackupFiles.extractDb(zip, snap)
+                dl.delete(); dec.delete()
+                rows += BackupFiles.merge(ctx, snap)
+                snap.delete()
+                set(BackupPhase.Restoring, base + span.toInt(), detail)
+                AppLog.d("restore: merged ${f.name}")
+            }
+            set(BackupPhase.Done, 100)
+            _notice.value = "Restored ${files.size} file${if (files.size == 1) "" else "s"} ($rows rows merged)"
+            AppLog.d("restore: done, $rows rows from ${files.size} files")
+        } catch (e: CancellationException) { set(BackupPhase.Failed, 0); throw e
+        } catch (e: WrongPassphraseException) { _notice.value = "Wrong passphrase"; set(BackupPhase.Failed, 0)
+        } catch (e: NeedsPassphraseException) { _notice.value = e.message; set(BackupPhase.Failed, 0)
+        } catch (e: DriveAuthException) { _notice.value = "Reconnect Google Drive first"; set(BackupPhase.Failed, 0)
+        } catch (e: Exception) {
+            AppLog.e("restore: failed", e)
+            _notice.value = "Restore failed: ${e.message ?: e.javaClass.simpleName}"
+            set(BackupPhase.Failed, 0)
+        } finally {
+            dl.delete(); dec.delete(); snap.delete()
+            lock.unlock()
+        }
+    }
+
+    private fun listBackups(token: String): List<RemoteFile> {
+        val out = ArrayList<RemoteFile>()
+        var page: String? = null
+        do {
+            val q = "trashed=false and mimeType='application/zip'"
+            val url = "$API?q=${enc(q)}&fields=${enc("nextPageToken,files(id,name,size)")}&pageSize=100" + (page?.let { "&pageToken=${enc(it)}" } ?: "")
+            val r = JSONObject(ok(http("GET", url, token)).body)
+            val a = r.optJSONArray("files")
+            if (a != null) for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                if (NAME_RE.matches(o.getString("name"))) out.add(RemoteFile(o.getString("id"), o.getString("name"), o.optString("size").toLongOrNull() ?: 0L))
+            }
+            page = r.optString("nextPageToken").ifEmpty { null }
+        } while (page != null)
+        // oldest year first; the legacy single file (everything up to its date) goes first so per-year files win on conflicts
+        return out.sortedBy { if (it.name == LEGACY_NAME) "" else it.name }
+    }
+
+    private fun download(token: String, f: RemoteFile, dst: File, onFrac: (Float) -> Unit) {
+        val conn = URL("$API/${f.id}?alt=media").openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 20_000; conn.readTimeout = 60_000
+            conn.setRequestProperty("Authorization", "Bearer $token")
+            val code = conn.responseCode
+            if (code !in 200..299) ok(Resp(code, null, null, runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()))
+            val total = if (f.size > 0) f.size else conn.contentLengthLong
+            var done = 0L; var last = -1
+            conn.inputStream.use { ins ->
+                dst.outputStream().buffered(64 * 1024).use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n); done += n
+                        if (total > 0) { val p = (done * 100 / total).toInt(); if (p != last) { last = p; onFrac(done.toFloat() / total) } }
+                    }
                 }
             }
-            z.closeEntry()
-            z.putNextEntry(ZipEntry("backup.json"))
-            z.write(meta.toByteArray(Charsets.UTF_8))
-            z.closeEntry()
-        }
-        AppLog.d("backup: zip ready, ${zip.length()} B (db ${snap.length()} B)")
+            if (total > 0 && done != total) throw IOException("download incomplete ($done of $total B)")
+        } finally { conn.disconnect() }
     }
 
     // ---------- Drive REST ----------
@@ -201,17 +359,17 @@ object DriveBackup {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
-    private fun findExisting(token: String): String? {
-        val q = "name='$FILE_NAME' and 'root' in parents and trashed=false"
+    private fun findExisting(token: String, name: String): String? {
+        val q = "name='$name' and 'root' in parents and trashed=false"
         val r = JSONObject(ok(http("GET", "$API?q=${enc(q)}&fields=${enc("files(id)")}&pageSize=1&orderBy=createdTime", token)).body)
         return r.optJSONArray("files")?.takeIf { it.length() > 0 }?.getJSONObject(0)?.getString("id")
     }
 
-    private suspend fun upload(token: String, file: File) {
+    private suspend fun upload(token: String, file: File, name: String, onFrac: (Float) -> Unit) {
         val total = file.length()
-        val id = findExisting(token)
-        AppLog.d("backup: ${if (id == null) "creating new file" else "updating existing file"}, $total B")
-        val meta = JSONObject().put("name", FILE_NAME).toString().toByteArray()
+        val id = findExisting(token, name)
+        AppLog.d("backup: $name ${if (id == null) "creating new file" else "updating existing file"}, $total B")
+        val meta = JSONObject().put("name", name).toString().toByteArray()
         val url = if (id == null) "$UPLOAD?uploadType=resumable&fields=id" else "$UPLOAD/$id?uploadType=resumable&fields=id"
         val start = ok(http(if (id == null) "POST" else "PATCH", url, token, mapOf(
             "Content-Type" to "application/json; charset=UTF-8",
@@ -223,7 +381,7 @@ object DriveBackup {
 
         var offset = 0L
         var failures = 0
-        set(BackupPhase.Uploading, 30)
+        onFrac(0f)
         RandomAccessFile(file, "r").use { raf ->
             while (offset < total) {
                 val end = minOf(offset + CHUNK, total) // exclusive
@@ -237,7 +395,7 @@ object DriveBackup {
                             val n = raf.read(buf, 0, minOf(buf.size.toLong(), end - from - sent).toInt())
                             if (n < 0) throw IOException("unexpected EOF")
                             os.write(buf, 0, n); sent += n
-                            set(BackupPhase.Uploading, 30 + ((from + sent) * 70 / total).toInt())
+                            onFrac((from + sent).toFloat() / total)
                         }
                     }
                     when {
@@ -259,7 +417,7 @@ object DriveBackup {
                 }
             }
         }
-        set(BackupPhase.Uploading, 100)
+        onFrac(1f)
     }
 
     /** Bytes the server has committed, from the Range header ("bytes=0-N"); none means 0. */

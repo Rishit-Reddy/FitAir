@@ -27,7 +27,6 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="FitAir"
-        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.FitAir">
 
         <activity

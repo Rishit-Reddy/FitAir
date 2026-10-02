@@ -12,8 +12,8 @@ android {
         applicationId = "com.fitair.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.6.1"
+        versionCode = 9
+        versionName = "0.7.0"
     }
 
     signingConfigs {
@@ -41,6 +41,7 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     lint { checkReleaseBuilds = false }
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
@@ -54,4 +55,8 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.google.android.gms:play-services-auth:21.2.0")
+
+    testImplementation("junit:junit:4.13.2")
+    // Android's org.json is a stub on the JVM
+    testImplementation("org.json:json:20240303")
 }

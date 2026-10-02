@@ -55,19 +55,6 @@ object HealthPerms {
     val all: Set<String> = read + write
 }
 
-data class TodayStats(
-    val steps: Long,
-    val distanceM: Double,
-    val activeKcal: Double?,
-    val hrAvg: Long?,
-    val hrMin: Long?,
-    val hrMax: Long?,
-    val restingHr: Long?,
-    val hrvMs: Double?,
-    val sleepMinutes: Long?,
-    val spo2: Double?,
-)
-
 data class ProbeRow(
     val type: String,
     val count: Int,
@@ -156,69 +143,16 @@ class HealthRepo(private val context: Context) {
         } while (token != null)
     }
 
-    suspend fun today(): TodayStats {
-        val zone = ZoneId.systemDefault()
-        val now = Instant.now()
-        val midnight = ZonedDateTime.now(zone).toLocalDate().atStartOfDay(zone).toInstant()
-        val sleepStart = ZonedDateTime.now(zone).toLocalDate().minusDays(1)
-            .atTime(LocalTime.of(18, 0)).atZone(zone).toInstant()
-        val since48h = now.minus(Duration.ofHours(48))
-
-        val agg = runCatching {
-            client.aggregate(
-                AggregateRequest(
-                    metrics = setOf(
-                        StepsRecord.COUNT_TOTAL,
-                        DistanceRecord.DISTANCE_TOTAL,
-                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
-                        HeartRateRecord.BPM_AVG,
-                        HeartRateRecord.BPM_MIN,
-                        HeartRateRecord.BPM_MAX,
-                    ),
-                    timeRangeFilter = TimeRangeFilter.between(midnight, now),
-                )
-            )
-        }.getOrNull()
-
-        val sleepMin = runCatching {
-            client.aggregate(
-                AggregateRequest(
-                    metrics = setOf(SleepSessionRecord.SLEEP_DURATION_TOTAL),
-                    timeRangeFilter = TimeRangeFilter.between(sleepStart, now),
-                )
-            )[SleepSessionRecord.SLEEP_DURATION_TOTAL]?.toMinutes()
-        }.getOrNull()
-
-        val resting = latest(RestingHeartRateRecord::class, since48h, now)?.beatsPerMinute
-        val hrv = latest(HeartRateVariabilityRmssdRecord::class, since48h, now)?.heartRateVariabilityMillis
-        val spo2 = latest(OxygenSaturationRecord::class, since48h, now)?.percentage?.value
-
-        return TodayStats(
-            steps = agg?.get(StepsRecord.COUNT_TOTAL) ?: 0L,
-            distanceM = agg?.get(DistanceRecord.DISTANCE_TOTAL)?.inMeters ?: 0.0,
-            activeKcal = agg?.get(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
-            hrAvg = agg?.get(HeartRateRecord.BPM_AVG),
-            hrMin = agg?.get(HeartRateRecord.BPM_MIN),
-            hrMax = agg?.get(HeartRateRecord.BPM_MAX),
-            restingHr = resting,
-            hrvMs = hrv,
-            sleepMinutes = sleepMin,
-            spo2 = spo2,
-        )
-    }
-
-    private suspend fun <T : Record> latest(type: KClass<T>, from: Instant, to: Instant): T? = runCatching {
-        client.readRecords(
-            ReadRecordsRequest(
-                recordType = type,
-                timeRangeFilter = TimeRangeFilter.between(from, to),
-                ascendingOrder = false,
-                pageSize = 1,
-            )
-        ).records.firstOrNull()
+    /**
+     * Health Connect's de-duplicated step total for [from, to) (HC merges overlapping origins).
+     * Used only by the self-check to validate the local DB; null if it cannot be read.
+     */
+    suspend fun stepsTotal(from: Instant, to: Instant): Long? = runCatching {
+        client.aggregate(
+            AggregateRequest(metrics = setOf(StepsRecord.COUNT_TOTAL), timeRangeFilter = TimeRangeFilter.between(from, to))
+        )[StepsRecord.COUNT_TOTAL] ?: 0L
     }.getOrNull()
 
-    /** Streams all pages of [type]; [onRecord] is invoked per record. */
     private suspend fun <T : Record> stream(
         type: KClass<T>,
         from: Instant,
