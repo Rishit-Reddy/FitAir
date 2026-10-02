@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 // ---------- helpers ----------
@@ -313,6 +314,32 @@ fun SettingsScreen(vm: MainViewModel) {
             }.getOrNull()
             if (txt != null) Text(txt, style = MaterialTheme.typography.bodySmall, color = dim)
         }
+        Spacer(Modifier.height(24.dp))
+        Hairline()
+        Spacer(Modifier.height(24.dp))
+        LogsSection()
+    }
+}
+
+@Composable
+private fun LogsSection() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var open by remember { mutableStateOf(false) }
+    Caption("Logs")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { open = !open }) { Text(if (open) "Hide" else "Show") }
+        TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(AppLog.text())) }) { Text("Copy") }
+        TextButton(onClick = { AppLog.clear() }) { Text("Clear") }
+    }
+    if (open) {
+        val v = AppLog.version // re-read when the log changes
+        val shown = remember(v) { AppLog.text().lines().takeLast(120).reversed().joinToString("\n") }
+        Text(
+            shown.ifEmpty { "No log yet" },
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 11.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

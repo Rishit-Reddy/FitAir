@@ -61,12 +61,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun syncNow() { SyncScheduler.syncNow(getApplication()) }
+    fun syncNow() { AppLog.d("Sync now tapped"); SyncScheduler.syncNow(getApplication()) }
 
     fun testConnection() {
         viewModelScope.launch {
             testing = true; testResult = null
             testResult = SyncRepo.testConnection(getPref(SyncPrefs.ADDR), getPref(SyncPrefs.KEY))
+            AppLog.d("Test connection: $testResult")
             testing = false
         }
     }
@@ -132,6 +133,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(applicationContext)
+        AppLog.d("app opened")
         setContent {
             val vm: MainViewModel = viewModel()
             FitAirTheme(vm.themeMode) {

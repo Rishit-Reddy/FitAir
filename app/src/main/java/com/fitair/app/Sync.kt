@@ -56,6 +56,8 @@ class SyncRepo(private val context: Context) {
 
         /** @throws IOException on any network/HTTP failure. */
         fun request(method: String, url: String, key: String, body: String?): String {
+            val t0 = System.currentTimeMillis()
+            val shortUrl = url.substringAfter("//").substringAfter("/", "").let { "/$it" }
             val c = URL(url).openConnection() as HttpURLConnection
             try {
                 c.requestMethod = method
@@ -71,8 +73,12 @@ class SyncRepo(private val context: Context) {
                 val code = c.responseCode
                 val stream = if (code in 200..299) c.inputStream else c.errorStream
                 val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-                if (code !in 200..299) throw IOException("HTTP $code")
+                AppLog.d("$method $shortUrl -> $code (${System.currentTimeMillis() - t0} ms, ${text.length} B back)")
+                if (code !in 200..299) throw IOException("HTTP $code: ${text.take(200)}")
                 return text
+            } catch (e: IOException) {
+                if (e.message?.startsWith("HTTP ") != true) AppLog.e("$method $shortUrl failed after ${System.currentTimeMillis() - t0} ms", e)
+                throw e
             } finally {
                 c.disconnect()
             }
@@ -85,10 +91,13 @@ class SyncRepo(private val context: Context) {
         val key = prefs.getString(SyncPrefs.KEY, "") ?: ""
         if (base.isEmpty()) throw IllegalStateException("No server address")
         val now = Instant.now()
-        val defaultDays = if (health.hasHistoryPermission()) 365L else 30L
+        val hist = health.hasHistoryPermission()
+        val defaultDays = if (hist) 365L else 30L
+        AppLog.d("sync start: server=$base, history permission=$hist, default window=$defaultDays d")
         val sent = LinkedHashMap<String, Int>()
         for (type in TYPES) {
             val wm = JSONObject(request("GET", "$base/watermark?type=${URLEncoder.encode(type, "UTF-8")}", key, null))
+            AppLog.d("[$type] server watermark=${if (wm.isNull("maxT")) "none" else wm.getLong("maxT")}")
             val from = if (wm.isNull("maxT")) now.minus(Duration.ofDays(defaultDays))
             else Instant.ofEpochMilli(wm.getLong("maxT")).minus(OVERLAP)
             var n = 0
@@ -98,29 +107,37 @@ class SyncRepo(private val context: Context) {
                 val arr = JSONArray()
                 buf.forEach { arr.put(it) }
                 val body = JSONObject().put("type", type).put("records", arr).toString()
+                AppLog.d("[$type] POST ${buf.size} records (${body.length / 1024} KB)")
                 request("POST", "$base/ingest", key, body)
                 n += buf.size
                 buf.clear()
             }
+            var pages = 0
             health.readForSync(type, from, now) { page ->
+                pages++
+                if (pages == 1 || pages % 10 == 0) AppLog.d("[$type] read page $pages (${page.size} items) from Health Connect")
                 for (o in page) {
                     buf.add(o)
                     if (buf.size >= BATCH) flush()
                 }
             }
             flush()
+            AppLog.d("[$type] done: $n sent over $pages pages")
             sent[type] = n
         }
         prefs.edit()
             .putLong(SyncPrefs.LAST, System.currentTimeMillis())
             .putString(SyncPrefs.COUNTS, JSONObject(sent as Map<*, *>).toString())
             .apply()
+        AppLog.d("sync finished OK")
         sent
     }
 }
 
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
+        AppLog.init(applicationContext)
+        AppLog.d("worker started (attempt $runAttemptCount)")
         val prefs = applicationContext.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE)
         fun status(s: String) = prefs.edit().putString(SyncPrefs.STATUS, s).apply()
         return try {
@@ -128,10 +145,13 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             status("ok")
             Result.success()
         } catch (e: IllegalStateException) {
+            AppLog.e("worker: not configured", e)
             status("Not configured"); Result.success()
         } catch (e: SecurityException) {
+            AppLog.e("worker: Health Connect permission", e)
             status("Health Connect permission missing"); Result.failure()
         } catch (e: Exception) {
+            AppLog.e("worker failed, will retry", e)
             status("Retrying: ${e.message ?: e.javaClass.simpleName}"); Result.retry()
         }
     }
