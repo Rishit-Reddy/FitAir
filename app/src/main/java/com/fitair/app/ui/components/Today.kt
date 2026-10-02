@@ -15,6 +15,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.fitair.app.core.Format
+import com.fitair.app.ui.sleep.StageMinutes
 import com.fitair.app.ui.theme.LocalStatusColors
 import com.fitair.app.ui.theme.Shapes
 import com.fitair.app.ui.theme.Spacing
@@ -38,8 +39,8 @@ fun FreshnessPill(text: String, stale: Boolean, modifier: Modifier = Modifier) {
 /** Big readiness number, band word and the one main driver. Tap opens the breakdown. */
 @Composable
 fun ReadinessHero(score: Int?, driver: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val st = LocalStatusColors.current
-    val dot = when { score == null -> MaterialTheme.colorScheme.outline; score >= 70 -> st.good; score >= 50 -> st.caution; else -> st.alert }
+    val tier = Tiers.readiness(score)
+    val dot = if (tier == Tone.Neutral) MaterialTheme.colorScheme.outline else toneColor(tier)
     Column(modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).padding(vertical = Spacing.xs)) {
         SectionHeader("Readiness")
         Row(verticalAlignment = Alignment.Bottom) {
@@ -54,14 +55,20 @@ fun ReadinessHero(score: Int?, driver: String?, onClick: () -> Unit, modifier: M
                 }
             }
         }
+        if (score != null) {
+            Spacer(Modifier.height(Spacing.s))
+            ScoreBar(score.toDouble(), tier)
+            Spacer(Modifier.height(Spacing.s))
+        }
         if (driver != null) Text(driver, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 /** Vital tile: label, value + unit, delta line. */
 @Composable
-fun MetricTile(label: String, value: String, unit: String?, delta: String?, tone: Tone, modifier: Modifier = Modifier) {
-    Column(modifier.clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l)) {
+fun MetricTile(label: String, value: String, unit: String?, delta: String?, tone: Tone, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val lines = if (compact) 2 else 1
+    Column(modifier.clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(if (compact) Spacing.m else Spacing.l)) {
         SectionHeader(label)
         Spacer(Modifier.height(Spacing.xs))
         Row(verticalAlignment = Alignment.Bottom) {
@@ -73,15 +80,65 @@ fun MetricTile(label: String, value: String, unit: String?, delta: String?, tone
         }
         val glyph = delta?.firstOrNull()?.takeIf { it == '▲' || it == '▼' }
         val dim = MaterialTheme.colorScheme.onSurfaceVariant
-        if (delta == null) Text(" ", style = Type.bodySmall, color = dim)
-        else if (glyph == null) Text(delta, style = Type.bodySmall, color = dim)
+        if (delta == null) Text(" ", style = Type.bodySmall, color = dim, minLines = lines, maxLines = if (compact) 2 else Int.MAX_VALUE)
+        else if (glyph == null) Text(delta, style = Type.bodySmall, color = dim, minLines = lines, maxLines = if (compact) 2 else Int.MAX_VALUE)
         else Text(
             buildAnnotatedString {
                 withStyle(SpanStyle(color = toneColor(tone))) { append(glyph) }
                 append(delta.substring(1))
             },
-            style = Type.bodySmall, color = dim,
+            style = Type.bodySmall, color = dim, minLines = lines, maxLines = if (compact) 2 else Int.MAX_VALUE,
         )
+    }
+}
+
+/**
+ * Today's one Sleep card: duration, score dot, window with the need glyph, a mini stage bar and the 7-day debt.
+ * The glyph carries the duration tier; the whole card opens Sleep.
+ */
+@Composable
+fun SleepCard(
+    duration: String, window: String?, score: Double?, needDiffMin: Double?, debt: String?, stages: StageMinutes?,
+    onClick: () -> Unit, modifier: Modifier = Modifier,
+) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        modifier.fillMaxWidth().clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(role = Role.Button, onClick = onClick).heightIn(min = 56.dp).padding(Spacing.l),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionHeader("Sleep \u00B7 last night", Modifier.weight(1f))
+            Text("\u203A", style = MaterialTheme.typography.titleMedium, color = dim)
+        }
+        Spacer(Modifier.height(Spacing.xs))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(duration, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            val tone = Tiers.sleepScore(score)
+            if (tone != Tone.Neutral) { StatusDot(toneColor(tone)); Spacer(Modifier.width(Spacing.s)) }
+            if (score != null) Text("${Math.round(score)}/100", style = MaterialTheme.typography.bodyLarge)
+        }
+        val tier = Tiers.duration(needDiffMin, 0.0)
+        val glyph = when { needDiffMin == null -> null; needDiffMin < 0 -> "\u25BC"; needDiffMin >= 15 -> "\u25B2"; else -> null }
+        val needText = needDiffMin?.let { Format.deltaShort(Math.round(it)) + " vs need" }
+        if (window != null || needText != null) {
+            Text(
+                buildAnnotatedString {
+                    if (window != null) append(window)
+                    if (window != null && needText != null) append(" \u00B7 ")
+                    if (glyph != null) { withStyle(SpanStyle(color = toneColor(tier))) { append(glyph) }; append(" ") }
+                    if (needText != null) append(needText)
+                },
+                style = Type.bodySmall, color = dim,
+            )
+        }
+        if (stages != null) {
+            Spacer(Modifier.height(Spacing.m))
+            StageBar(stages.awake, stages.light, stages.rem, stages.deep, height = 8.dp, legend = false)
+        }
+        if (debt != null) {
+            Spacer(Modifier.height(Spacing.s))
+            Text("7-day debt $debt", style = Type.bodySmall, color = dim)
+        }
     }
 }
 

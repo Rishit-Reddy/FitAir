@@ -51,7 +51,8 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
             return@Page
         }
         val sel = selected?.takeIf { it in ui.days.indices }
-        val shown = ui.days[sel ?: ui.days.indexOfLast { it.value != null }]
+        // The header always shows today / the last reading; a selection only fills the card under the chart.
+        val shown = ui.days[ui.days.indexOfLast { it.value != null }]
         val xl = ui.days.mapIndexed { i, d -> if (i == 0 || i == ui.days.lastIndex || i == ui.days.size / 2) d.date.format(SHORT_FMT) else "" }
         val floats = values.map { it?.toFloat() }
         val tone = TrendMath.tone(metric, shown.value, ui.band)
@@ -59,7 +60,6 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
         // today's value, what it means, then the history
         SectionHeader(
             when {
-                sel != null -> shown.date.format(DAY_FMT)
                 shown.date == LocalDate.now() -> "Today"
                 else -> "Last reading · ${shown.date.format(DAY_FMT)}"
             },
@@ -106,13 +106,36 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
             BarChart(floats, Modifier.fillMaxWidth(), selectedIndex = sel, onSelect = { selected = it },
                 baseline = chronic?.toFloat(), xLabels = xl)
         } else {
+            val pointColors = TrendMath.pointTones(metric, values, ui.band).map { if (it == Tone.Neutral) null else toneColor(it) }
             LineChart(floats, Modifier.fillMaxWidth(), selectedIndex = sel, onSelect = { selected = it },
-                band = ui.band?.let { it.lo.toFloat() to it.hi.toFloat() }, xLabels = xl,
-                latestTone = if (tone != Tone.Neutral && sel == null) toneColor(tone) else null)
+                band = ui.band?.let { it.lo.toFloat() to it.hi.toFloat() }, xLabels = xl, pointColors = pointColors)
             if (ui.band != null) {
                 Spacer(Modifier.height(Spacing.xs))
                 Text("Shaded: your usual range, ${fmt(ui.band.lo, metric)}–${fmt(ui.band.hi, metric)} ${metric.unit} (28-day mean ± 1 SD)",
                     style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        if (sel != null) {
+            Spacer(Modifier.height(Spacing.m))
+            val day = ui.days[sel]
+            val dtone = TrendMath.tone(metric, day.value, ui.band)
+            SelectionCard(day.date.format(DAY_FMT), "Back to today", { selected = null }) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(fmt(day.value, metric), style = MaterialTheme.typography.headlineMedium)
+                    Spacer(Modifier.width(Spacing.xs))
+                    Text(metric.unit, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = Spacing.xs))
+                    if (dtone != Tone.Neutral) {
+                        Spacer(Modifier.width(Spacing.s))
+                        StatusDot(toneColor(dtone), Modifier.align(Alignment.CenterVertically))
+                    }
+                }
+                if (metric != TrendMetric.Load && day.value != null) {
+                    Text(TrendMath.deltaText(day.value, ui.band, metric.unit), style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (metric == TrendMetric.Readiness) {
+                    day.drivers.take(2).forEach { Text(it, style = Type.body) }
+                }
             }
         }
 

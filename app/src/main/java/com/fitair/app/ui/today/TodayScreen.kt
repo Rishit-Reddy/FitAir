@@ -1,6 +1,8 @@
 package com.fitair.app.ui.today
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,10 +27,10 @@ private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefaul
 /** Screens opened by tapping a row or card on Today. */
 enum class TodayDest { Sleep, Readiness, Hrv, RestingHr }
 
-/** Today, top to bottom: header, readiness hero, vitals, last night, exceptions. */
+/** Today: header, then [todayBlocks] in order (readiness, sleep card, vitals, exceptions). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
+fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}, scroll: ScrollState = rememberScrollState()) {
     val ui = vm.ui
     var sheet by remember { mutableStateOf(false) }
     // tick once a minute so "synced 12 min ago" stays true
@@ -36,7 +38,7 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
     LaunchedEffect(Unit) { while (true) { delay(60_000); now = System.currentTimeMillis() } }
 
     PullToRefreshBox(isRefreshing = vm.syncing, onRefresh = vm::refresh, modifier = Modifier.fillMaxSize()) {
-        Page {
+        Page(scrollState = scroll) {
             val fresh = Format.freshness(now, ui?.lastSyncMs ?: 0L)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(ui?.date?.format(DATE_FMT) ?: "", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -49,41 +51,52 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}) {
                 EmptyState("No data yet", "Pull down to sync from Health Connect.")
                 return@Page
             }
-            ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) })
-
-            SectionBreak()
-            ui.vitals.chunked(2).forEachIndexed { i, pair ->
-                if (i > 0) Spacer(Modifier.height(Spacing.m))
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
-                    pair.forEach { v ->
-                        val m = Modifier.weight(1f).let { b ->
-                            if (v.dest == null) b else b.clip(Shapes.card).clickable(role = Role.Button) { onOpen(v.dest!!) }
-                        }
-                        MetricTile(if (v.dest != null) v.label + " \u203A" else v.label, v.value, v.unit, v.delta, v.tone, m)
-                    }
-                }
-            }
-
-            ui.night?.let { n ->
-                Spacer(Modifier.height(Spacing.m))
-                val line = listOfNotNull(n.window, n.score?.let { "score $it" }, n.debt?.let { "$it debt" }).joinToString(" \u00B7 ")
-                SummaryRow("Last night", line.ifEmpty { Format.DASH }, onClick = { onOpen(TodayDest.Sleep) })
-            }
-
-            if (ui.insights.isNotEmpty()) {
-                SectionBreak()
-                SectionHeader("Worth a look")
-                Spacer(Modifier.height(Spacing.s))
-                ui.insights.forEach { i ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
-                        StatusDot(toneColor(if (i.alert) Tone.Alert else Tone.Caution))
-                        Spacer(Modifier.width(Spacing.m))
-                        Text(i.title, style = Type.body)
-                    }
+            val blocks = todayBlocks(ui)
+            blocks.forEachIndexed { i, b ->
+                if (i > 0) { if (blocks[i - 1].card && b.card) Spacer(Modifier.height(Spacing.m)) else SectionBreak() }
+                when (b) {
+                    TodayBlock.Readiness -> ReadinessBlock(ui, onClick = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) })
+                    TodayBlock.Sleep -> SleepBlock(ui.night!!, onOpen)
+                    TodayBlock.Vitals -> VitalsBlock(ui.vitals, onOpen)
+                    TodayBlock.Insights -> InsightsBlock(ui.insights)
                 }
             }
         }
     }
     val r = ui?.readiness
     if (sheet && r != null) BreakdownSheet(r, onDismiss = { sheet = false }, onTrend = { sheet = false; onOpen(TodayDest.Readiness) })
+}
+
+@Composable
+private fun ReadinessBlock(ui: TodayUi, onClick: () -> Unit) =
+    ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = onClick)
+
+@Composable
+private fun SleepBlock(n: SleepNight, onOpen: (TodayDest) -> Unit) =
+    SleepCard(Format.duration(n.durationMin), n.window, n.score, n.needDiffMin, n.debt, n.stages, onClick = { onOpen(TodayDest.Sleep) })
+
+/** One row of compact tiles with equal heights. */
+@Composable
+private fun VitalsBlock(vitals: List<Vital>, onOpen: (TodayDest) -> Unit) {
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
+        vitals.forEach { v ->
+            val m = Modifier.weight(1f).fillMaxHeight().let { b ->
+                if (v.dest == null) b else b.clip(Shapes.card).clickable(role = Role.Button) { onOpen(v.dest!!) }
+            }
+            MetricTile(if (v.dest != null) v.label + " \u203A" else v.label, v.value, v.unit, v.delta, v.tone, m, compact = true)
+        }
+    }
+}
+
+@Composable
+private fun InsightsBlock(insights: List<Insight>) {
+    SectionHeader("Worth a look")
+    Spacer(Modifier.height(Spacing.s))
+    insights.forEach { i ->
+        Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(toneColor(if (i.alert) Tone.Alert else Tone.Caution))
+            Spacer(Modifier.width(Spacing.m))
+            Text(i.title, style = Type.body)
+        }
+    }
 }

@@ -125,3 +125,28 @@ fun SubTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifi
         Hairline()
     }
 }
+
+/**
+ * Card shown next to a chart for the selected bar/point. Fixed minimum height so selecting never resizes
+ * the page; the action (e.g. "Back to last night") only appears when [actionLabel] and [onAction] are set.
+ */
+@Composable
+fun SelectionCard(
+    caption: String,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier.fillMaxWidth().heightIn(min = 112.dp).clip(com.fitair.app.ui.theme.Shapes.card)
+            .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(caption.uppercase(), style = Type.caption, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel, style = Type.label) }
+        }
+        Spacer(Modifier.height(Spacing.xs))
+        content()
+    }
+}

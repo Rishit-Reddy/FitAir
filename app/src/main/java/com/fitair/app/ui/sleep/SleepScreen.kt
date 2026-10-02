@@ -2,27 +2,27 @@ package com.fitair.app.ui.sleep
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fitair.app.core.Format
 import com.fitair.app.ui.components.DetailHeader
 import com.fitair.app.ui.components.EmptyState
-import com.fitair.app.ui.components.Hairline
 import com.fitair.app.ui.components.InlineError
 import com.fitair.app.ui.components.Page
 import com.fitair.app.ui.components.SectionBreak
 import com.fitair.app.ui.components.SectionHeader
-import com.fitair.app.ui.components.StatRow
+import com.fitair.app.ui.components.ScoreBar
+import com.fitair.app.ui.components.SelectionCard
+import com.fitair.app.ui.components.StageBar
 import com.fitair.app.ui.components.StatusDot
 import com.fitair.app.ui.components.SubTabs
 import com.fitair.app.ui.components.Tone
@@ -32,7 +32,6 @@ import com.fitair.app.ui.components.charts.LineChart
 import com.fitair.app.ui.theme.Shapes
 import com.fitair.app.ui.theme.Spacing
 import com.fitair.app.ui.theme.Type
-import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -58,23 +57,20 @@ private val dateFmt = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 @Composable
 private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    val scroll = rememberScrollState()
-    val scope = rememberCoroutineScope()
     val nights = remember(all, vm.range) { SleepModel.lastN(all, vm.range) }
     val withData = nights.count { it.hasData }
     val default = remember(all) { SleepModel.defaultNight(all) }
-    Page(modifier, scroll) {
+    Page(modifier) {
         if (default == null) {
             EmptyState("No sleep data yet", "Sync Health Connect, then check back.")
             return@Page
         }
-        val sel = all.firstOrNull { it.date == vm.selected } ?: all.first { it.date == default }
-        val isDefault = sel.date == default
-        val caption = if (isDefault) "Last night · ${sel.date.format(dateFmt)}" else SleepModel.headerLabel(sel.date, LocalDate.now())
-        SectionHeader(caption)
-        if (!isDefault) TextButton(onClick = vm::selectDefault) { Text("Back to last night") }
+        // The top block always shows the last night; chart taps only change the selection card.
+        val last = all.first { it.date == default }
+        val sel = all.firstOrNull { it.date == vm.selected } ?: last
+        SectionHeader("Last night · ${last.date.format(dateFmt)}")
         Spacer(Modifier.height(Spacing.s))
-        Detail(sel, vm.detail)
+        Detail(last, vm.detailFor(last.date))
 
         SectionBreak()
         SectionHeader("History")
@@ -95,23 +91,27 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
         val labels = remember(nights) { nights.map { SleepModel.xLabel(it.date) } }
         val selIdx = nights.indexOfFirst { it.date == sel.date }.takeIf { it >= 0 }
         val need = SleepModel.needMin(nights)
-        val pick: (Int) -> Unit = { i ->
-            vm.select(nights[i].date)
-            scope.launch { scroll.animateScrollTo(0) }
-        }
+        val pick: (Int) -> Unit = { i -> vm.select(nights[i].date) }
+        val barTones = remember(nights) { SleepModel.durationTones(nights) }
+        val scoreTones = remember(nights) { SleepModel.scoreTones(nights) }
+        val barColors = barTones.map { if (it == Tone.Neutral) null else toneColor(it) }
+        val pointColors = scoreTones.map { if (it == Tone.Neutral) null else toneColor(it) }
         SectionHeader("Time asleep")
         Spacer(Modifier.height(Spacing.s))
         BarChart(
             SleepModel.durationHours(nights), selectedIndex = selIdx, onSelect = pick,
-            baseline = need?.let { (it / 60.0).toFloat() }, xLabels = labels,
+            baseline = need?.let { (it / 60.0).toFloat() }, xLabels = labels, barColors = barColors,
         )
-        if (need != null) {
-            Text("Dashed line: your need, ${hm(need)}", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs))
-        }
+        Text(
+            if (need != null) "Dashed line: your need, ${hm(need)}. Green meets it, amber is up to an hour short, red is more." else " ",
+            style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs),
+        )
+        Spacer(Modifier.height(Spacing.m))
+        SelectedNight(sel, vm.detailFor(sel.date), isDefault = sel.date == default, onBack = vm::selectDefault)
         Spacer(Modifier.height(Spacing.l))
         SectionHeader("Sleep score")
         Spacer(Modifier.height(Spacing.s))
-        LineChart(SleepModel.scores(nights), selectedIndex = selIdx, onSelect = pick, xLabels = labels)
+        LineChart(SleepModel.scores(nights), selectedIndex = selIdx, onSelect = pick, xLabels = labels, pointColors = pointColors)
     }
 }
 
@@ -123,7 +123,34 @@ private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Top block: duration, score, window, stages, components, efficiency. */
+/** Card between the charts: the selected night. Fixed height so selecting never moves the page. */
+@Composable
+private fun SelectedNight(n: Night, d: NightDetail?, isDefault: Boolean, onBack: () -> Unit) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    SelectionCard(
+        caption = n.date.format(dateFmt),
+        actionLabel = if (isDefault) null else "Back to last night",
+        onAction = if (isDefault) null else onBack,
+    ) {
+        if (!n.hasData) {
+            Text("No sleep recorded", style = Type.bodySmall, color = dim)
+            return@SelectionCard
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val window = if (d?.bedtime != null) " · ${d.bedtime} – ${d.wake}" else ""
+            Text(hm(n.sleepMin) + window, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val tone = SleepModel.tone(n.score)
+            if (tone != Tone.Neutral) { StatusDot(toneColor(tone)); Spacer(Modifier.width(Spacing.s)) }
+            Text(n.score?.let { "${Math.round(it)}/100" } ?: Format.DASH, style = MaterialTheme.typography.bodyLarge)
+        }
+        Spacer(Modifier.height(Spacing.s))
+        val st = d?.stages
+        if (st != null) StageBar(st.awake, st.light, st.rem, st.deep, height = Spacing.s, legend = false)
+        else Box(Modifier.fillMaxWidth().height(Spacing.s).clip(Shapes.chip).background(MaterialTheme.colorScheme.outlineVariant))
+    }
+}
+
+/** Top block: duration, score, window, stages, component cards. */
 @Composable
 private fun Detail(n: Night, d: NightDetail?) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -137,47 +164,49 @@ private fun Detail(n: Night, d: NightDetail?) {
         if (tone != Tone.Neutral) { StatusDot(toneColor(tone)); Spacer(Modifier.width(Spacing.s)) }
         Text(n.score?.let { "${Math.round(it)} / 100" } ?: Format.DASH, style = MaterialTheme.typography.bodyLarge)
     }
-    if (d?.bedtime != null) Text("${d.bedtime} – ${d.wake}", style = Type.bodySmall, color = dim)
+    Spacer(Modifier.height(Spacing.s))
+    ScoreBar(n.score, SleepModel.tone(n.score), Modifier.fillMaxWidth())
+    if (d?.bedtime != null) Text("${d.bedtime} – ${d.wake}", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.s))
     Spacer(Modifier.height(Spacing.l))
     val st = d?.stages
     if (st == null) {
         Text(if (d == null) "Loading…" else "No stage data for this night.", style = Type.bodySmall, color = dim)
-    } else StageBar(st)
-    val comps = SleepModel.COMPONENTS.filter { n.components.containsKey(it.first) }
-    if (comps.isNotEmpty()) {
-        Spacer(Modifier.height(Spacing.l))
-        SectionHeader("Score components")
-        comps.forEach { (k, label) -> StatRow(label, "${Math.round(n.components.getValue(k))}") }
+    } else StageBar(st.awake, st.light, st.rem, st.deep)
+
+    Spacer(Modifier.height(Spacing.l))
+    SectionHeader("Score components")
+    Spacer(Modifier.height(Spacing.s))
+    val cards = SleepModel.componentCards(n)
+    cards.chunked(2).forEachIndexed { r, row ->
+        if (r > 0) Spacer(Modifier.height(Spacing.m))
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            row.forEach { ComponentCardView(it, Modifier.weight(1f).fillMaxHeight()) }
+        }
     }
-    n.efficiency?.let {
-        if (comps.isEmpty()) { Spacer(Modifier.height(Spacing.l)); Hairline() }
-        StatRow("Efficiency", "${Math.round(it * 100)} %")
-    }
+    Text(
+        "Score = duration 40% · efficiency 25% · deep+REM 20% · regularity 15%. Duration is vs your need; the others vs healthy ranges.",
+        style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.m),
+    )
 }
 
-/** Neutral depth ramp on onSurface, the only place a sleep stage gets a colour. */
-private val stageAlpha = listOf("Awake" to 0.12f, "Light" to 0.30f, "REM" to 0.55f, "Deep" to 0.85f)
-
 @Composable
-private fun StageBar(st: StageMinutes) {
-    val ink = MaterialTheme.colorScheme.onSurface
+private fun ComponentCardView(c: ComponentCard, modifier: Modifier) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    val mins = listOf(st.awake, st.light, st.rem, st.deep)
-    val parts = stageAlpha.mapIndexed { i, (label, a) -> Triple(label, mins[i], ink.copy(alpha = a)) }
-    Row(Modifier.fillMaxWidth().height(Spacing.s).clip(Shapes.chip)) {
-        parts.filter { it.second > 0 }.forEach { (_, m, c) -> Box(Modifier.weight(m.toFloat()).fillMaxHeight().background(c)) }
-    }
-    Spacer(Modifier.height(Spacing.s))
-    Row(Modifier.fillMaxWidth()) {
-        parts.forEach { (label, m, c) ->
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(c)
-                    Spacer(Modifier.width(Spacing.xs))
-                    Text(label, style = Type.bodySmall, color = dim)
-                }
-                Text(hm(m), style = Type.bodySmall)
-            }
+    Column(modifier.clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(c.name.uppercase(), style = Type.caption, color = dim, modifier = Modifier.weight(1f))
+            if (c.tone != Tone.Neutral) StatusDot(toneColor(c.tone))
+        }
+        Spacer(Modifier.height(Spacing.xs))
+        Text(c.headline, style = MaterialTheme.typography.headlineSmall)
+        Text(c.reading, style = Type.bodySmall, color = dim, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(Spacing.s))
+        if (c.score != null) {
+            ScoreBar(c.score, c.tone, Modifier.fillMaxWidth())
+            Text("Score ${Math.round(c.score)}/100", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs))
+        } else {
+            Spacer(Modifier.height(4.dp))
+            Text(" ", style = Type.bodySmall, modifier = Modifier.padding(top = Spacing.xs))
         }
     }
 }

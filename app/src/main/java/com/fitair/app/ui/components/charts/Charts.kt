@@ -49,6 +49,9 @@ internal fun indexAt(x: Float, left: Float, width: Float, n: Int): Int? {
     return (((x - left) / width) * n).toInt().coerceIn(0, n - 1)
 }
 
+/** Point dot radius in dp: 2.5 normally, 1.75 when there are more than 31 points. */
+internal fun pointRadiusDp(n: Int): Float = if (n > 31) 1.75f else 2.5f
+
 private fun fmt(v: Float): String =
     if (Math.abs(v) >= 100f || v == Math.rint(v.toDouble()).toFloat()) Math.round(v).toString() else String.format(Locale.US, "%.1f", v)
 
@@ -107,6 +110,8 @@ fun BarChart(
     onSelect: (Int) -> Unit = {},
     baseline: Float? = null,
     xLabels: List<String> = emptyList(),
+    /** Per-bar colour; null (list or entry) means neutral ink. A selected bar keeps its colour. */
+    barColors: List<Color?>? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
@@ -133,7 +138,7 @@ fun BarChart(
         }
         values.forEachIndexed { i, v ->
             if (v == null) return@forEachIndexed
-            val base = if (selectedIndex == i) primary else dim
+            val base = barColors?.getOrNull(i) ?: dim
             val x = left + slot * i + (slot - bw) / 2f
             val yt = y(v).coerceAtMost(bottom - 1.dp.toPx())
             drawRoundRect(base, Offset(x, yt), Size(bw, bottom - yt), androidx.compose.ui.geometry.CornerRadius(minOf(2.dp.toPx(), bw / 2f)))
@@ -154,7 +159,8 @@ fun LineChart(
     onSelect: (Int) -> Unit = {},
     band: Pair<Float, Float>? = null,
     xLabels: List<String> = emptyList(),
-    latestTone: Color? = null,
+    /** Per-point dot colour; null (list or entry) draws no dot. */
+    pointColors: List<Color?>? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
@@ -201,9 +207,12 @@ fun LineChart(
             if (prevNull && nextNull) drawCircle(dim, 2.5.dp.toPx(), Offset(x(i), y(v)))
         }
         flush()
-        if (latestTone != null) {
-            val li = values.indexOfLast { it != null }
-            if (li >= 0) drawCircle(latestTone, 4.dp.toPx(), Offset(x(li), y(values[li]!!)))
+        if (pointColors != null) {
+            val r = pointRadiusDp(n).dp.toPx()
+            values.forEachIndexed { i, v ->
+                val c = pointColors.getOrNull(i)
+                if (v != null && c != null) drawCircle(c, r, Offset(x(i), y(v)))
+            }
         }
         selectedIndex?.takeIf { it in 0 until n }?.let { i ->
             values[i]?.let { v -> drawCircle(primary, 4.dp.toPx(), Offset(x(i), y(v))); drawCircle(cs.background, 1.8.dp.toPx(), Offset(x(i), y(v))) }

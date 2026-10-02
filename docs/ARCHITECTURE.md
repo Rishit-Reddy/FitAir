@@ -83,7 +83,8 @@ Everything else is convenience.
 | 4 | Plan (P4) | Up to 3 SuggestionCards in time order: Train / Cook / Wind down | The "what to do" answer |
 | 5 | Agenda (P2) | Compact timeline of today's remaining events plus "free 14:00-16:30" gaps of 45 min or more. Collapsed to 4 rows, "Show all". | Context for the plan |
 | 6 | To-dos (P5) | Open tasks due today or overdue, with checkbox and quick add. Max 5 shown. | Lightweight; not time-blocked |
-| 7 | Vitals | 2x2 grid: Sleep (h:mm, delta vs need), HRV, Resting HR, Steps, each with a delta vs the 28-day baseline | Detail for the curious |
+| 6b | Sleep card | Full width: last night's duration, score dot, window with the need glyph, mini stage bar, 7-day debt (only when 60 min or more). Tap opens Sleep. | Sleep is the strongest morning driver of readiness |
+| 7 | Vitals | One row of 3 compact tiles: HRV, Resting HR, Steps, each with a delta vs the 28-day baseline | Detail for the curious |
 | 8 | Insights | Only severity `watch`/`alert`, max 2, one line each | Exceptions only |
 
 Removed from Today: HR avg/min/max, distance, SpO2 and active energy (they move to the Coach or Diagnostics). The Refresh button is replaced by pull-to-refresh.
@@ -107,19 +108,23 @@ Rule: screens compose only these components and Material3 primitives. No ad-hoc 
 
 **Spacing** (4dp base): `xs 4, s 8, m 12, l 16, xl 24, xxl 32, xxxl 48`. Page gutter 20dp. Gap between Today sections 24dp, with a hairline between sections. Touch targets of at least 48dp.
 **Shape:** cards 12dp, chips 8dp, sheets 20dp top. No elevation; use hairlines and `surfaceVariant` fills.
-**Colour roles** (extend the current schemes; only primary is saturated):
+**Colour roles** (v0.7.5: every colour answers *which stage*, *is this good for me* or *is this off my baseline*; nothing is coloured for decoration):
 | Role | Light | Dark | Use |
 |---|---|---|---|
 | background/surface | #FAFAF9 | #0F0F0F | page |
 | surfaceVariant | #F0F0EE | #1A1A1A | cards, user bubble |
 | onSurface | #161616 | #EDEDEB | text |
 | onSurfaceVariant | #666662 | #8C8C88 | secondary text (light darkened for contrast at least 4.5:1) |
-| outlineVariant | #E2E2DF | #2A2A2A | hairlines |
-| primary | #3E8E88 | #6FB8B1 | accept, selected, links |
-| good | #3E8E88 | #6FB8B1 | readiness 70 or more, positive delta (same as primary on purpose) |
-| caution | #A26A14 | #D9A55A | readiness 50-69, `watch` |
-| alert | #B4483C | #E07A6E | readiness under 50, `alert` |
-Status colours appear only as a 6dp dot or a delta arrow, **never as large fills**.
+| outlineVariant | #E2E2DF | #2A2A2A | hairlines, ScoreBar track |
+| primary | #3E8E88 | #6FB8B1 | interaction only: text buttons, selected tab, chart selection tint and ring |
+| good | #2F7D4F | #6CC895 | tier marks (dots, glyphs, ScoreBar, chart points) |
+| caution | #A26A14 | #E0A955 | tier marks, `watch` |
+| alert | #B4483C | #EE8073 | tier marks, `alert` |
+| stage Awake | #D2691E | #F0A35C | sleep stages only |
+| stage Light | #3D8BC9 | #93CCF5 | sleep stages only |
+| stage REM | #7A4FC9 | #B79BF5 | sleep stages only |
+| stage Deep | #24307F | #6A7CF0 | sleep stages only |
+Tier colours are never used on text runs or card backgrounds. Tier thresholds live in `ui/components/Tiers.kt`; stage colours in `LocalStageColors`. See `docs/UI_REFINEMENT_075.md` section 1.
 **Motion:** standard 150 ms (fade, expand), emphasized 250 ms (sheet, card accept collapse), easing `FastOutSlowIn`. No spring bounce, no number count-up. Honour the system animator scale of 0, which disables animation.
 
 ### 2.5 AI suggestions

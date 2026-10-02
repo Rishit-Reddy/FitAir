@@ -16,6 +16,8 @@ import com.fitair.app.SyncScheduler
 import com.fitair.app.analytics.ReadinessView
 import com.fitair.app.core.Format
 import com.fitair.app.ui.components.Tone
+import com.fitair.app.ui.sleep.SleepModel
+import com.fitair.app.ui.sleep.StageMinutes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,9 +28,22 @@ import java.time.ZoneId
 
 class Vital(val label: String, val value: String, val unit: String?, val delta: String?, val tone: Tone) { var dest: TodayDest? = null }
 
-class SleepNight(val window: String?, val score: String?, val debt: String?)
+/** Last night on Today: duration, window, score, difference to the personal need, 7-day debt and stage minutes. */
+class SleepNight(
+    val durationMin: Long, val window: String?, val score: Double?, val needDiffMin: Double?, val debt: String?, val stages: StageMinutes?,
+)
 
 class Insight(val title: String, val alert: Boolean)
+
+/** Today's content blocks, top to bottom. `card` blocks sit on surfaceVariant and are separated by a gap instead of a hairline. */
+enum class TodayBlock(val card: Boolean) { Readiness(false), Sleep(true), Vitals(true), Insights(false) }
+
+fun todayBlocks(ui: TodayUi): List<TodayBlock> = buildList {
+    add(TodayBlock.Readiness)
+    if (ui.night != null) add(TodayBlock.Sleep)
+    add(TodayBlock.Vitals)
+    if (ui.insights.isNotEmpty()) add(TodayBlock.Insights)
+}
 
 class TodayUi(
     val date: LocalDate,
@@ -90,21 +105,15 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         val sleepJson = row?.optString("sleep_json")?.takeIf { it.isNotEmpty() && it != "null" }?.let { JSONObject(it) }
 
         val vitals = ArrayList<Vital>()
-        // Sleep: duration and delta vs the personal need
         val sleepMin = row?.takeIf { it.has("sleep_min") }?.getLong("sleep_min")
-        val need = sleepJson?.optDouble("need_min", Double.NaN)?.takeIf { !it.isNaN() }
-        val sleepDiff = if (sleepMin != null && need != null) sleepMin - need else null
-        vitals.add(Vital("Sleep", Format.duration(sleepMin), null,
-            sleepDiff?.let { (if (it < 0) "▼ " else if (it >= 15) "▲ " else "") + Format.deltaShort(Math.round(it)) + " vs need" },
-            when { sleepDiff == null -> Tone.Neutral; sleepDiff < 0 -> Tone.Caution; sleepDiff >= 15 -> Tone.Good; else -> Tone.Neutral }))
         vitals.add(vital("HRV", row, "hrv", col("hrv"), "ms", higherBetter = true, minDelta = 2.0))
         vitals.add(vital("Resting HR", row, "rhr", col("rhr"), "bpm", higherBetter = false, minDelta = 1.0))
         val steps = row?.takeIf { it.has("steps") }?.getLong("steps")
         val typSteps = Format.baseline(col("steps"))
-        vitals.add(Vital("Steps", steps?.let { Format.thousands(it) } ?: Format.DASH, null,
-            typSteps?.let { "typical ${Format.thousands(Math.round(it))} a day" }, Tone.Neutral))
+        vitals.add(Vital("Steps", steps?.let { Format.compactCount(it) } ?: Format.DASH, null,
+            typSteps?.let { "typical ${Format.compactCount(Math.round(it))}" }, Tone.Neutral))
 
-        vitals[0].dest = TodayDest.Sleep; vitals[1].dest = TodayDest.Hrv; vitals[2].dest = TodayDest.RestingHr
+        vitals[0].dest = TodayDest.Hrv; vitals[1].dest = TodayDest.RestingHr
         return TodayUi(
             date = today, readiness = readiness, lastSyncMs = prefs.getLong(SyncPrefs.LAST, 0L), vitals = vitals,
             night = sleepNight(ctx, z, today, sleepMin, sleepJson), insights = insights(row), hasData = row != null,
@@ -124,18 +133,29 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         if (sleepMin == null) return null
         val (lo, hi) = LocalApi.bounds(today, z)
         var window: String? = null
-        LocalStore.get(ctx).db.rawQuery("SELECT start_ms,end_ms FROM sleep WHERE end_ms>=? AND end_ms<? ORDER BY end_ms-start_ms DESC LIMIT 1",
+        var stages: StageMinutes? = null
+        val db = LocalStore.get(ctx).db
+        db.rawQuery("SELECT start_ms,end_ms,origin FROM sleep WHERE end_ms>=? AND end_ms<? ORDER BY end_ms-start_ms DESC LIMIT 1",
             arrayOf(lo.toString(), hi.toString())).use {
             if (it.moveToFirst()) {
-                val a = java.time.Instant.ofEpochMilli(it.getLong(0)).atZone(z); val b = java.time.Instant.ofEpochMilli(it.getLong(1)).atZone(z)
+                val start = it.getLong(0); val end = it.getLong(1); val origin = it.getString(2)
+                val a = java.time.Instant.ofEpochMilli(start).atZone(z); val b = java.time.Instant.ofEpochMilli(end).atZone(z)
                 window = "${Format.clock(a.hour, a.minute)} – ${Format.clock(b.hour, b.minute)}"
+                if (origin != null) {
+                    // same grouping as SleepVm.queryDetail so Today and Sleep show identical minutes
+                    val by = HashMap<Int, Double>()
+                    db.rawQuery("SELECT stage, sum(end_ms-start_ms)/60000.0 FROM sleep_stage WHERE sleep_start_ms=? AND origin=? GROUP BY stage",
+                        arrayOf(start.toString(), origin)).use { c -> while (c.moveToNext()) by[c.getInt(0)] = c.getDouble(1) }
+                    stages = SleepModel.stageMinutes(by).takeIf { s -> !s.isEmpty }
+                }
             }
         }
-        val score = sj?.takeIf { !it.isNull("score") }?.optDouble("score")
+        val score = sj?.takeIf { !it.isNull("score") }?.optDouble("score")?.takeIf { !it.isNaN() }
+        val need = sj?.optDouble("need_min", Double.NaN)?.takeIf { !it.isNaN() }
         val debt = sj?.optDouble("sleep_debt_min", 0.0) ?: 0.0
         return SleepNight(
-            window = window, score = score?.let { "${Math.round(it)}" },
-            debt = if (debt >= 60) Format.duration(Math.round(debt)) else null,
+            durationMin = sleepMin, window = window, score = score, needDiffMin = need?.let { sleepMin - it },
+            debt = if (debt >= 60) Format.duration(Math.round(debt)) else null, stages = stages,
         )
     }
 

@@ -1,5 +1,6 @@
 package com.fitair.app.ui.trends
 
+import com.fitair.app.ui.components.Tiers
 import com.fitair.app.ui.components.Tone
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -66,7 +67,7 @@ object TrendMath {
         if (value == null) return Tone.Neutral
         return when (metric) {
             TrendMetric.Load -> Tone.Neutral
-            TrendMetric.Readiness -> when { value >= 70 -> Tone.Good; value >= 50 -> Tone.Caution; else -> Tone.Alert }
+            TrendMetric.Readiness -> Tiers.readiness(value.roundToLong().toInt())
             else -> {
                 if (band == null) return Tone.Neutral
                 when (side(value, band)) {
@@ -76,6 +77,13 @@ object TrendMath {
             }
         }
     }
+
+    /**
+     * Chart point tones. Readiness: every point by tier. HRV / resting HR: only points outside [band] are toned
+     * (Good in the good direction, Caution in the bad one), the rest Neutral. Load is always Neutral.
+     */
+    fun pointTones(metric: TrendMetric, values: List<Double?>, band: Band?): List<Tone> =
+        values.map { tone(metric, it, band) }
 
     /** One plain-language line about where the latest value sits against the usual range. */
     fun interpret(name: String, values: List<Double?>, b: Band?): String {

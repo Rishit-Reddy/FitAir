@@ -75,7 +75,10 @@ fun FitAirTheme(mode: ThemeMode, content: @Composable () -> Unit) {
             }
         }
     }
-    CompositionLocalProvider(LocalStatusColors provides if (dark) DarkStatus else LightStatus) {
+    CompositionLocalProvider(
+        LocalStatusColors provides if (dark) DarkStatus else LightStatus,
+        LocalStageColors provides if (dark) DarkStage else LightStage,
+    ) {
         MaterialTheme(colorScheme = if (dark) DarkScheme else LightScheme, typography = AppTypography, content = content)
     }
 }

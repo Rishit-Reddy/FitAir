@@ -28,6 +28,10 @@ object Format {
     /** 8234 -> "8,234". */
     fun thousands(n: Long): String = String.format(Locale.US, "%,d", n)
 
+    /** 8234 -> "8,234", 10234 -> "10.2k" (one decimal from 10,000). */
+    fun compactCount(n: Long): String =
+        if (n >= 10_000) String.format(Locale.US, "%.1fk", n / 1000.0) else thousands(n)
+
     /** Readiness band word. */
     fun band(score: Int?): String? = when {
         score == null -> null

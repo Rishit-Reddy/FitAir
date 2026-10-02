@@ -62,4 +62,10 @@ class FormatTest {
         assertEquals(0.0, Num.sd(listOf(3.0)), 0.0)
         assertEquals(1.0, Num.sd(listOf(1.0, 2.0, 3.0)), 1e-12)
     }
+
+    @Test fun compactCount() {
+        assertEquals("8,234", Format.compactCount(8234))
+        assertEquals("10.2k", Format.compactCount(10234))
+        assertEquals("9,999", Format.compactCount(9999))
+    }
 }

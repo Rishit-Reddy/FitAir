@@ -57,11 +57,20 @@ object Motion {
     fun <T> emphasized(): TweenSpec<T> = tween(EMPHASIZED_MS, easing = FastOutSlowInEasing)
 }
 
-/** Status colours; only ever drawn as a 6dp dot or a delta arrow, never as large fills. */
+/** Tier colours (good / caution / alert); drawn only as dots, glyphs and score bars, never on text or backgrounds. */
 @Immutable
 class StatusColors(val good: Color, val caution: Color, val alert: Color)
 
-val LightStatus = StatusColors(good = Color(0xFF3E8E88), caution = Color(0xFFA26A14), alert = Color(0xFFB4483C))
-val DarkStatus = StatusColors(good = Color(0xFF6FB8B1), caution = Color(0xFFD9A55A), alert = Color(0xFFE07A6E))
+val LightStatus = StatusColors(good = Color(0xFF2F7D4F), caution = Color(0xFFA26A14), alert = Color(0xFFB4483C))
+val DarkStatus = StatusColors(good = Color(0xFF6CC895), caution = Color(0xFFE0A955), alert = Color(0xFFEE8073))
 
 val LocalStatusColors = staticCompositionLocalOf { LightStatus }
+
+/** Sleep stage colours; used for sleep stages only. */
+@Immutable
+class StageColors(val awake: Color, val light: Color, val rem: Color, val deep: Color)
+
+val LightStage = StageColors(awake = Color(0xFFD2691E), light = Color(0xFF3D8BC9), rem = Color(0xFF7A4FC9), deep = Color(0xFF24307F))
+val DarkStage = StageColors(awake = Color(0xFFF0A35C), light = Color(0xFF93CCF5), rem = Color(0xFFB79BF5), deep = Color(0xFF6A7CF0))
+
+val LocalStageColors = staticCompositionLocalOf { LightStage }

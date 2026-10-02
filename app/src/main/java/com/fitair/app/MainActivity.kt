@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -215,6 +216,8 @@ private fun MainContent(vm: MainViewModel) {
     val coachVm: CoachVm = viewModel()
     // simple state-based stack: a full-screen detail opened from Today; system Back returns to Today
     var dest by rememberSaveable { mutableStateOf<TodayDest?>(null) }
+    // hoisted so Today keeps its scroll position while a detail screen is open
+    val todayScroll = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
     BackHandler(enabled = dest != null) { dest = null }
     if (dest != null) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
@@ -250,7 +253,7 @@ private fun MainContent(vm: MainViewModel) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(todayVm, onOpen = { dest = it })
+                0 -> TodayScreen(todayVm, onOpen = { dest = it }, scroll = todayScroll)
                 1 -> CoachScreen(coachVm)
                 2 -> LogScreen(vm)
                 else -> SettingsScreen(vm)

@@ -58,4 +58,13 @@ class TrendMathTest {
         assertEquals(Tone.Neutral, TrendMath.tone(TrendMetric.Hrv, 60.0, null))
         assertEquals(Tone.Neutral, TrendMath.tone(TrendMetric.Load, 99.0, b))
     }
+
+    @Test fun pointTones() {
+        val b = Band(50.0, 5.0)
+        assertEquals(listOf(Tone.Neutral, Tone.Caution, Tone.Good, Tone.Neutral),
+            TrendMath.pointTones(TrendMetric.Hrv, listOf(50.0, 40.0, 60.0, null), b))
+        assertEquals(listOf(Tone.Caution, Tone.Good), TrendMath.pointTones(TrendMetric.RestingHr, listOf(60.0, 40.0), b))
+        assertEquals(listOf(Tone.Good, Tone.Caution, Tone.Alert), TrendMath.pointTones(TrendMetric.Readiness, listOf(72.0, 55.0, 40.0), null))
+        assertEquals(listOf(Tone.Neutral), TrendMath.pointTones(TrendMetric.Load, listOf(500.0), b))
+    }
 }
