@@ -130,6 +130,12 @@ private fun DataTab(vm: MainViewModel) {
         val last = if (vm.syncLastMs > 0)
             java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(vm.syncLastMs)) else "never"
         Text("Last sync: $last", style = Type.bodySmall, color = dim)
+        if (vm.newestHrMs > 0) {
+            val t = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(vm.newestHrMs))
+            Text("Newest heart rate data: $t", style = Type.bodySmall, color = dim)
+            Text("If this is old, Google Health has not passed newer data from your Air to Health Connect yet. Open Google Health to sync it, then Sync now.",
+                style = Type.bodySmall, color = dim)
+        }
         vm.syncStatus?.takeIf { it != "ok" }?.let { Text(it, style = Type.bodySmall, color = dim) }
         vm.syncCounts?.let { raw ->
             val txt = runCatching {

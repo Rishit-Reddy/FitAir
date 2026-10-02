@@ -68,6 +68,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var syncCounts by mutableStateOf(prefs.getString(SyncPrefs.COUNTS, null)); private set
     var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
     var dbSizeBytes by mutableStateOf(0L); private set
+    /** End of the newest heart-rate bucket in the local DB: how fresh the data Google Health gave us really is. */
+    var newestHrMs by mutableStateOf(0L); private set
 
     // ---- coach chat (legacy path; the Coach tab now uses ui.coach.CoachVm, remove with CoachScreen(MainViewModel)) ----
     private val coachRepo = CoachRepo(app)
@@ -130,6 +132,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 syncLastMs = prefs.getLong(SyncPrefs.LAST, 0L)
                 syncCounts = prefs.getString(SyncPrefs.COUNTS, null)
                 dbSizeBytes = withContext(Dispatchers.IO) { runCatching { LocalStore.get(app).sizeBytes() }.getOrDefault(0L) }
+                newestHrMs = withContext(Dispatchers.IO) {
+                    runCatching { LocalStore.get(app).db.rawQuery("SELECT max(t30) FROM hr_30s", null).use { if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) + 30_000L else 0L } }.getOrDefault(0L)
+                }
                 syncStatus = prefs.getString(SyncPrefs.STATUS, null)
             }
         }

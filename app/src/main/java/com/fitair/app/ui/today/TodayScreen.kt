@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,6 +68,7 @@ fun TodayScreen(
     val ui = vm.ui
     val mode = vm.mode
     var sheet by remember { mutableStateOf(false) }
+    var syncInfo by remember { mutableStateOf(false) }
     val agenda: AgendaVm = viewModel()
     val requestCalendar = rememberCalendarPermissionRequest { agenda.refresh() }
     LifecycleResumeEffect(Unit) { vm.onOpen(); onPauseOrDispose { } }
@@ -80,6 +82,34 @@ fun TodayScreen(
     LaunchedEffect(mode, ui?.date, ui?.facts != null) { if (mode == Mode.Evening) vm.ensureSummary() }
     val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) vm.enableWaterReminders() }
 
+    if (syncInfo) {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val zone = ZoneId.systemDefault()
+        fun clock(ms: Long?) = ms?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).atZone(zone) }?.let { Format.clock(it.hour, it.minute) } ?: "never"
+        AlertDialog(
+            onDismissRequest = { syncInfo = false },
+            title = { Text("Sync status") },
+            text = {
+                Column {
+                    Text("FitAir last checked Health Connect at ${clock(ui?.lastSyncMs)}.")
+                    Spacer(Modifier.height(Spacing.s))
+                    Text("Newest data it holds is from ${clock(ui?.dataToMs)}.")
+                    Spacer(Modifier.height(Spacing.s))
+                    Text("Your Air sends data to Google Health, and Google Health passes it to Health Connect, where FitAir reads it. " +
+                        "If the newest data is old, open Google Health so it syncs your Air, then pull down here.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    syncInfo = false
+                    val i = ctx.packageManager.getLaunchIntentForPackage("com.fitbit.FitbitMobile")
+                    if (i != null) try { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { }
+                }) { Text("Open Google Health") }
+            },
+            dismissButton = { TextButton(onClick = { syncInfo = false; vm.refresh() }) { Text("Sync now") } },
+        )
+    }
+
     PullToRefreshBox(
         isRefreshing = vm.syncing, onRefresh = vm::refresh,
         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
@@ -91,12 +121,20 @@ fun TodayScreen(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(ui?.date?.format(DATE_FMT) ?: "", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 val dataTo = ui?.dataToMs?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
-                FreshnessPill(if (dataTo != null) Copy.dataTo(Format.clock(dataTo.hour, dataTo.minute)) else fresh.text, fresh.stale)
+                val checked = ui?.lastSyncMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
+                val newestAgeMin = ui?.dataToMs?.let { (now - it) / 60_000L }
+                FreshnessPill(
+                    if (dataTo != null) Copy.dataTo(Format.clock(dataTo.hour, dataTo.minute)) else fresh.text,
+                    stale = fresh.stale || (newestAgeMin != null && newestAgeMin > 45),
+                    sub = checked?.let { "checked " + Format.clock(it.hour, it.minute) },
+                    onClick = { syncInfo = true },
+                )
                 Box(
                     Modifier.size(Spacing.minTouch).clickable(role = Role.Button) { onOpen(TodayDest.Settings) }.semantics { contentDescription = "Settings" },
                     contentAlignment = Alignment.Center,
                 ) { Icon(NavIcons.Gear, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
+            vm.syncNote?.let { Text(it, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = Spacing.xs)) }
             Spacer(Modifier.height(Spacing.l))
             vm.error?.let { InlineError(it, onRetry = { vm.load(setMode = true) }) }
             if (ui == null || mode == null) return@Page

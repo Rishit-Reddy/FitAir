@@ -12,7 +12,7 @@ android {
         applicationId = "com.fitair.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 17
+        versionCode = 18
         versionName = "0.8.2"
     }
 

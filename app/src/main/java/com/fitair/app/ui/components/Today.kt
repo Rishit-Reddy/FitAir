@@ -27,18 +27,22 @@ import com.fitair.app.ui.theme.Shapes
 import com.fitair.app.ui.theme.Spacing
 import com.fitair.app.ui.theme.Type
 
-/** "data to 14:05" / "synced 12 min ago" with a status dot. */
+/** "data to 14:05" (newest data) over "checked 14:20" (last sync) with a status dot; tap opens the sync-status sheet. */
 @Composable
-fun FreshnessPill(text: String, stale: Boolean, modifier: Modifier = Modifier) {
+fun FreshnessPill(text: String, stale: Boolean, modifier: Modifier = Modifier, sub: String? = null, onClick: (() -> Unit)? = null) {
     val st = LocalStatusColors.current
     Row(
         modifier.clip(Shapes.chip).background(MaterialTheme.colorScheme.surfaceVariant)
+            .then(if (onClick != null) Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = Spacing.m, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusDot(if (stale) st.caution else MaterialTheme.colorScheme.outline)
         Spacer(Modifier.width(6.dp))
-        Text(text, style = Type.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column {
+            Text(text, style = Type.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (sub != null) Text(sub, style = Type.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

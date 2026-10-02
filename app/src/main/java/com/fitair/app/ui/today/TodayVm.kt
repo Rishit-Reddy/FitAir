@@ -136,6 +136,9 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
     var summary by mutableStateOf<SummaryText?>(null); private set
     var summaryLoading by mutableStateOf(false); private set
     var logged by mutableStateOf<LoggedWater?>(null); private set
+    /** One quiet line after a sync: what it found ("no newer data from Google Health"), cleared after ~10 s. */
+    var syncNote by mutableStateOf<String?>(null); private set
+    private var dataToBeforeSync: Long? = null
 
     private var touched = false
     private var openedAtMs = 0L
@@ -149,10 +152,27 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
             SyncScheduler.nowFlow(app).collect { infos ->
                 val now = infos.any { !it.state.isFinished }
                 syncing = now
+                if (!was && now) { dataToBeforeSync = ui?.dataToMs; syncNote = null }
                 if (was && !now) {
                     val within = openedAtMs > 0 && System.currentTimeMillis() - openedAtMs <= 30_000 && !touched
                     load(setMode = modeOnSyncEnd && (within || openedAtMs == 0L))
                     modeOnSyncEnd = false
+                    val before = dataToBeforeSync
+                    launch {
+                        kotlinx.coroutines.delay(700) // let load() publish the new state
+                        val after = ui?.dataToMs
+                        val failed = prefs.getString(SyncPrefs.STATUS, null)?.let { it != "ok" } ?: false
+                        syncNote = when {
+                            failed -> "Sync problem: " + prefs.getString(SyncPrefs.STATUS, "")
+                            after == null -> "Synced. No heart rate data in Health Connect yet."
+                            before == null || after > before -> "Synced. New data up to " + Format.clock(
+                                java.time.Instant.ofEpochMilli(after).atZone(java.time.ZoneId.systemDefault()).let { it.hour }, 
+                                java.time.Instant.ofEpochMilli(after).atZone(java.time.ZoneId.systemDefault()).minute)
+                            else -> "Synced. Google Health has nothing newer yet. Open it to sync your Air."
+                        }
+                        kotlinx.coroutines.delay(10_000)
+                        syncNote = null
+                    }
                 }
                 was = now
             }
