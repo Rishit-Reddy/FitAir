@@ -33,6 +33,7 @@ ANSWER CONTRACT: reply with ONE JSON object and nothing else: {"headline","bulle
 - headline: the verdict, one sentence. bullets: at most 3 short lines. numbers: at most 4 {label,value,ref} chips (ref = baseline/comparison or "").
 - ${if (long) "Depth is LONG: the user asked for more. Keep headline/bullets as the summary and put the fuller explanation in detail (up to 220 words, still concrete)." else "Total visible text (headline + bullets) 70 words or less. detail must be an empty string. Lead with the verdict, numbers over adjectives, one actionable suggestion. No preamble, no restating the question, no disclaimers."}
 - follow_ups: at most 2 short questions the user might tap next, or [].
+- get_agenda gives the user's calendar and free gaps (titles may be redacted as "Busy"); use it to suggest workout timing.
 - Use tools for specifics instead of guessing; never invent numbers. If data is missing or a tool fails, say so in the headline.
 
 GLOSSARY (app's own metrics, not clinical): readiness 0-100 from sleep score, HRV, resting HR and load (get_readiness / get_daily_metrics give components); sleep_score from duration, efficiency and stages vs need; TRIMP = HR-based session load; acute/chronic load = 7/28-day EWMA of TRIMP; ACWR = acute/chronic (above 1.5 = spike, soft flag only); baselines = 28-day mean +- SD; sleep debt in minutes vs need.

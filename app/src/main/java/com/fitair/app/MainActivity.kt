@@ -37,6 +37,7 @@ import com.fitair.app.ui.today.TodayScreen
 import com.fitair.app.ui.trends.TrendMetric
 import com.fitair.app.ui.trends.TrendScreen
 import com.fitair.app.ui.sleep.SleepScreen
+import com.fitair.app.ui.agenda.AgendaScreen
 import androidx.activity.compose.BackHandler
 import com.fitair.app.ui.today.TodayVm
 import java.io.IOException
@@ -222,6 +223,7 @@ private fun MainContent(vm: MainViewModel) {
     if (dest != null) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
             when (dest) {
+                TodayDest.Agenda -> AgendaScreen(onBack = { dest = null })
                 TodayDest.Sleep -> SleepScreen(onBack = { dest = null })
                 TodayDest.Readiness -> TrendScreen(TrendMetric.Readiness) { dest = null }
                 TodayDest.Hrv -> TrendScreen(TrendMetric.Hrv) { dest = null }

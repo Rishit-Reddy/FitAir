@@ -14,7 +14,15 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.TextButton
 import com.fitair.app.core.Format
+import com.fitair.app.ui.agenda.AgendaFormat
+import com.fitair.app.ui.agenda.AgendaItemRow
+import com.fitair.app.ui.agenda.AgendaLive
+import com.fitair.app.ui.agenda.AgendaVm
+import com.fitair.app.ui.agenda.rememberCalendarPermissionRequest
+import java.time.ZoneId
 import com.fitair.app.ui.components.*
 import com.fitair.app.ui.theme.Spacing
 import com.fitair.app.ui.theme.Type
@@ -25,7 +33,7 @@ import java.util.Locale
 private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())
 
 /** Screens opened by tapping a row or card on Today. */
-enum class TodayDest { Sleep, Readiness, Hrv, RestingHr }
+enum class TodayDest { Agenda, Sleep, Readiness, Hrv, RestingHr }
 
 /** Today: header, then [todayBlocks] in order (readiness, sleep card, vitals, exceptions). */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,6 +41,10 @@ enum class TodayDest { Sleep, Readiness, Hrv, RestingHr }
 fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}, scroll: ScrollState = rememberScrollState()) {
     val ui = vm.ui
     var sheet by remember { mutableStateOf(false) }
+    val agenda: AgendaVm = viewModel()
+    val requestCalendar = rememberCalendarPermissionRequest { agenda.refresh() }
+    LaunchedEffect(Unit) { agenda.goToday() }
+    AgendaLive(agenda)
     // tick once a minute so "synced 12 min ago" stays true
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); now = System.currentTimeMillis() } }
@@ -56,6 +68,7 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}, scroll: ScrollSta
                 if (i > 0) { if (blocks[i - 1].card && b.card) Spacer(Modifier.height(Spacing.m)) else SectionBreak() }
                 when (b) {
                     TodayBlock.Readiness -> ReadinessBlock(ui, onClick = { if (ui.readiness != null) sheet = true else onOpen(TodayDest.Readiness) })
+                    TodayBlock.Agenda -> AgendaBlock(agenda, onOpen = { onOpen(TodayDest.Agenda) }, onRequest = requestCalendar)
                     TodayBlock.Sleep -> SleepBlock(ui.night!!, onOpen)
                     TodayBlock.Vitals -> VitalsBlock(ui.vitals, onOpen)
                     TodayBlock.Insights -> InsightsBlock(ui.insights)
@@ -70,6 +83,26 @@ fun TodayScreen(vm: TodayVm, onOpen: (TodayDest) -> Unit = {}, scroll: ScrollSta
 @Composable
 private fun ReadinessBlock(ui: TodayUi, onClick: () -> Unit) =
     ReadinessHero(ui.readiness?.score, ui.readiness?.mainDriver ?: ui.readiness?.note, onClick = onClick)
+
+/** "AGENDA ›" caption (opens the day timeline), then rows, a quiet prompt, or the empty line. */
+@Composable
+private fun AgendaBlock(vm: AgendaVm, onOpen: () -> Unit, onRequest: () -> Unit) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    val z = remember { ZoneId.systemDefault() }
+    Box(Modifier.heightIn(min = Spacing.minTouch).clickable(role = Role.Button, onClick = onOpen), contentAlignment = Alignment.CenterStart) {
+        SectionHeader("Agenda \u203A")
+    }
+    if (!vm.hasPerm) {
+        Text("See today's events next to your readiness", style = Type.body, color = dim)
+        TextButton(onClick = onRequest) { Text("Show my calendar", style = Type.label) }
+        return
+    }
+    if (!vm.loaded) return
+    if (!AgendaFormat.hasEvents(vm.items)) { Text(AgendaFormat.emptyLine(), style = Type.body, color = dim); return }
+    val c = AgendaFormat.collapse(vm.items)
+    c.visible.forEach { AgendaItemRow(it, vm.colors, z, withEnd = false) }
+    if (c.hidden) TextButton(onClick = onOpen) { Text("Show all (${c.eventCount})", style = Type.label) }
+}
 
 @Composable
 private fun SleepBlock(n: SleepNight, onOpen: (TodayDest) -> Unit) =

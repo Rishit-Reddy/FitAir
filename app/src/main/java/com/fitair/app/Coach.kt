@@ -2,6 +2,7 @@ package com.fitair.app
 
 import android.content.Context
 import com.fitair.app.coach.*
+import com.fitair.app.integrations.calendar.*
 import com.fitair.app.data.dao.AiCallDao
 import com.fitair.app.data.dao.AiCallRow
 import com.fitair.app.secure.SecretStore
@@ -103,6 +104,8 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
             listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
         ToolSpec("get_load", "Daily training load: TRIMP, acute (7-day EWMA), chronic (28-day EWMA) and ACWR for a date range.",
             listOf(Triple("from", "string", "Start date YYYY-MM-DD"), Triple("to", "string", "End date YYYY-MM-DD"))),
+        ToolSpec("get_agenda", "The user's calendar for one date: events (start/end local ISO, title, all_day, busy) and free_gaps (from/to, minutes) of 45+ min between 07:00 and 22:00 after now. Titles may be redacted as 'Busy'. Empty if calendar access is off.",
+            listOf(Triple("date", "string", "Date YYYY-MM-DD"))),
     )
 
     /** Legacy entry used by MainViewModel: returns the answer as displayable text. */
@@ -221,6 +224,7 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
             "get_daily_metrics" -> "looked up daily metrics ${d(a.optString("from"))} to ${d(a.optString("to"))}"
             "get_insights" -> "looked up insights for ${d(a.optString("date"))}"
             "get_load" -> "looked up training load ${d(a.optString("from"))} to ${d(a.optString("to"))}"
+            "get_agenda" -> "looked up calendar for ${d(a.optString("date"))}"
             else -> "called $name"
         }
     }
@@ -237,11 +241,35 @@ class CoachRepo(private val ctx: Context, private val clientOverride: LlmClient?
         return if (s.length <= MAX_RESULT) s else s.take(MAX_RESULT) + "...[truncated, ${s.length} chars total]"
     }
 
+    private suspend fun agenda(dateStr: String): JSONObject {
+        val day = try { LocalDate.parse(dateStr) } catch (e: Exception) { throw org.json.JSONException("date must be YYYY-MM-DD") }
+        val share = prefs.getBoolean("coach_share_titles", false)
+        val repo = CalendarRepo(ctx)
+        val evs = repo.eventsForDay(day, zone)
+        val ds = day.atStartOfDay(zone).toInstant()
+        val items = buildAgenda(evs, Instant.now(), ds, day.plusDays(1).atStartOfDay(zone).toInstant(), zone = zone)
+        fun t(i: Instant) = i.atZone(zone).toLocalDateTime().toString()
+        val events = JSONArray(); val gaps = JSONArray()
+        for (it in items) when (it) {
+            is AgendaItem.Event -> events.put(JSONObject().put("start", t(it.e.begin)).put("end", t(it.e.end))
+                .put("title", if (share) it.e.title else "Busy").put("all_day", it.e.allDay).put("busy", it.e.busy)
+                .also { o -> if (share && it.e.location != null) o.put("location", it.e.location) })
+            is AgendaItem.Gap -> gaps.put(JSONObject().put("from", t(it.from)).put("to", t(it.to))
+                .put("minutes", java.time.Duration.between(it.from, it.to).toMinutes()))
+        }
+        return JSONObject().put("date", day.toString()).put("events", events).put("free_gaps", gaps)
+    }
+
     /** Runs a tool; never throws except cancellation. Returns the (<= 3k chars) result JSON string. */
     private suspend fun runTool(name: String, args: JSONObject): String {
         val t = System.currentTimeMillis()
         AppLog.d("coach tool: $name $args")
         return try {
+            if (name == "get_agenda") {
+                val out = compact(agenda(args.getString("date")))
+                AppLog.d("coach tool: $name ok in ${System.currentTimeMillis() - t} ms (${out.length} chars)")
+                return out
+            }
             val tz = "tz=${enc(zone.id)}"
             val path = when (name) {
                 "get_day_summary" -> "/summary/day?date=${enc(args.getString("date"))}&$tz"

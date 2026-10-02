@@ -12,6 +12,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.fitair.app.ui.theme.Shapes
@@ -32,21 +34,24 @@ fun SuggestionCard(title: String, reason: String, onAccept: () -> Unit, onDismis
     }
 }
 
-/** One calendar event: time on the left; non-busy events render dimmed. */
+/** One calendar event: time on the left, optional calendar colour dot, title; tentative (non-busy) events render dimmed. */
 @Composable
-fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modifier = Modifier) {
+fun AgendaRow(time: String, title: String, busy: Boolean = true, modifier: Modifier = Modifier, dot: Color? = null) {
     val c = if (busy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(time, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(96.dp))
-        Text(title, style = Type.body, color = c, maxLines = 1)
+        if (dot != null) { StatusDot(dot); Spacer(Modifier.width(Spacing.s)) }
+        Text(title, style = Type.body, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
+/** A free slot between events; the time is onSurfaceVariant (primary is for interaction). */
 @Composable
 fun FreeGapRow(range: String, modifier: Modifier = Modifier) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(range, style = Type.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.width(96.dp))
-        Text("free", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(range, style = Type.bodySmall, color = dim, modifier = Modifier.width(96.dp))
+        Text("free", style = Type.bodySmall, color = dim)
     }
 }
 

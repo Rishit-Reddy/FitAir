@@ -36,10 +36,11 @@ class SleepNight(
 class Insight(val title: String, val alert: Boolean)
 
 /** Today's content blocks, top to bottom. `card` blocks sit on surfaceVariant and are separated by a gap instead of a hairline. */
-enum class TodayBlock(val card: Boolean) { Readiness(false), Sleep(true), Vitals(true), Insights(false) }
+enum class TodayBlock(val card: Boolean) { Readiness(false), Agenda(false), Sleep(true), Vitals(true), Insights(false) }
 
 fun todayBlocks(ui: TodayUi): List<TodayBlock> = buildList {
     add(TodayBlock.Readiness)
+    add(TodayBlock.Agenda) // always: events, or a quiet prompt / empty line
     if (ui.night != null) add(TodayBlock.Sleep)
     add(TodayBlock.Vitals)
     if (ui.insights.isNotEmpty()) add(TodayBlock.Insights)
