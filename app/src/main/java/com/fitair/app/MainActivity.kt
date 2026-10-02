@@ -42,6 +42,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var saving by mutableStateOf(false); private set
     var logMessage by mutableStateOf<String?>(null); private set
 
+    var syncing by mutableStateOf(false); private set
+    var syncLastMs by mutableStateOf(prefs.getLong(SyncPrefs.LAST, 0L)); private set
+    var syncCounts by mutableStateOf(prefs.getString(SyncPrefs.COUNTS, null)); private set
+    var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
+    var testResult by mutableStateOf<String?>(null); private set
+    var testing by mutableStateOf(false); private set
+
+    init {
+        SyncScheduler.schedulePeriodic(app)
+        viewModelScope.launch {
+            SyncScheduler.nowFlow(app).collect { infos ->
+                syncing = infos.any { !it.state.isFinished }
+                syncLastMs = prefs.getLong(SyncPrefs.LAST, 0L)
+                syncCounts = prefs.getString(SyncPrefs.COUNTS, null)
+                syncStatus = prefs.getString(SyncPrefs.STATUS, null)
+            }
+        }
+    }
+
+    fun syncNow() { SyncScheduler.syncNow(getApplication()) }
+
+    fun testConnection() {
+        viewModelScope.launch {
+            testing = true; testResult = null
+            testResult = SyncRepo.testConnection(getPref(SyncPrefs.ADDR), getPref(SyncPrefs.KEY))
+            testing = false
+        }
+    }
+
     fun setTheme(m: ThemeMode) { themeMode = m; prefs.edit().putString("theme", m.key).apply() }
     fun getPref(k: String): String = prefs.getString(k, "") ?: ""
     fun setPref(k: String, v: String) { prefs.edit().putString(k, v).apply() }

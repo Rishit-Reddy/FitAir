@@ -21,6 +21,8 @@ import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalTime
@@ -44,6 +46,7 @@ object HealthPerms {
         HealthPermission.getReadPermission(RespiratoryRateRecord::class),
         HealthPermission.getReadPermission(Vo2MaxRecord::class),
         HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY,
+        HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
     )
     val write: Set<String> = setOf(
         HealthPermission.getWritePermission(ExerciseSessionRecord::class),
@@ -82,6 +85,76 @@ class HealthRepo(private val context: Context) {
 
     suspend fun hasAllPermissions(): Boolean =
         client.permissionController.getGrantedPermissions().containsAll(HealthPerms.all)
+
+    suspend fun hasHistoryPermission(): Boolean =
+        client.permissionController.getGrantedPermissions().contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+
+    /** Reads [type] records in [from, to) page by page; [onPage] gets API.md-shaped JSON entries per page. */
+    suspend fun readForSync(type: String, from: Instant, to: Instant, onPage: suspend (List<JSONObject>) -> Unit) {
+        when (type) {
+            "heart_rate" -> pages(HeartRateRecord::class, from, to, onPage) { r ->
+                val o = r.metadata.dataOrigin.packageName
+                r.samples.map { JSONObject().put("t", it.time.toEpochMilli()).put("bpm", it.beatsPerMinute).put("origin", o) }
+            }
+            "steps" -> pages(StepsRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("start", r.startTime.toEpochMilli()).put("end", r.endTime.toEpochMilli())
+                    .put("count", r.count).put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "distance" -> pages(DistanceRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("start", r.startTime.toEpochMilli()).put("end", r.endTime.toEpochMilli())
+                    .put("meters", r.distance.inMeters).put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "total_calories" -> pages(TotalCaloriesBurnedRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("start", r.startTime.toEpochMilli()).put("end", r.endTime.toEpochMilli())
+                    .put("kcal", r.energy.inKilocalories).put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "resting_hr" -> pages(RestingHeartRateRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("t", r.time.toEpochMilli()).put("bpm", r.beatsPerMinute)
+                    .put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "hrv" -> pages(HeartRateVariabilityRmssdRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("t", r.time.toEpochMilli()).put("rmssd", r.heartRateVariabilityMillis)
+                    .put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "respiratory_rate" -> pages(RespiratoryRateRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("t", r.time.toEpochMilli()).put("rate", r.rate)
+                    .put("origin", r.metadata.dataOrigin.packageName))
+            }
+            "sleep" -> pages(SleepSessionRecord::class, from, to, onPage) { r ->
+                val st = JSONArray()
+                r.stages.forEach {
+                    st.put(JSONObject().put("start", it.startTime.toEpochMilli()).put("end", it.endTime.toEpochMilli()).put("stage", it.stage))
+                }
+                listOf(JSONObject().put("start", r.startTime.toEpochMilli()).put("end", r.endTime.toEpochMilli())
+                    .put("origin", r.metadata.dataOrigin.packageName).put("stages", st))
+            }
+            "exercise" -> pages(ExerciseSessionRecord::class, from, to, onPage) { r ->
+                listOf(JSONObject().put("start", r.startTime.toEpochMilli()).put("end", r.endTime.toEpochMilli())
+                    .put("type", r.exerciseType).put("title", r.title ?: "").put("origin", r.metadata.dataOrigin.packageName))
+            }
+            else -> throw IllegalArgumentException("unknown type $type")
+        }
+    }
+
+    private suspend fun <T : Record> pages(
+        type: KClass<T>, from: Instant, to: Instant,
+        onPage: suspend (List<JSONObject>) -> Unit, map: (T) -> List<JSONObject>,
+    ) {
+        var token: String? = null
+        do {
+            val resp = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = type,
+                    timeRangeFilter = TimeRangeFilter.between(from, to),
+                    pageSize = 1000,
+                    pageToken = token,
+                )
+            )
+            val out = resp.records.flatMap(map)
+            if (out.isNotEmpty()) onPage(out)
+            token = resp.pageToken?.takeIf { it.isNotEmpty() }
+        } while (token != null)
+    }
 
     suspend fun today(): TodayStats {
         val zone = ZoneId.systemDefault()

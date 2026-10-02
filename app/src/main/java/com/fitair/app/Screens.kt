@@ -284,7 +284,35 @@ fun SettingsScreen(vm: MainViewModel) {
         Spacer(Modifier.height(20.dp))
         PrefField(vm, "gemini_key", "Gemini API key", secret = true)
         PrefField(vm, "openai_key", "OpenAI API key", secret = true)
-        PrefField(vm, "server_addr", "Laptop server address", secret = false)
+        Spacer(Modifier.height(24.dp))
+        Hairline()
+        Spacer(Modifier.height(24.dp))
+        Caption("Laptop sync")
+        Spacer(Modifier.height(8.dp))
+        PrefField(vm, SyncPrefs.ADDR, "Laptop server address (http://100.x.y.z:8787)", secret = false)
+        PrefField(vm, SyncPrefs.KEY, "Server API key", secret = true)
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { vm.testConnection() }, enabled = !vm.testing) {
+                Text(if (vm.testing) "Testing…" else "Test connection")
+            }
+            TextButton(onClick = { vm.syncNow() }, enabled = !vm.syncing) {
+                Text(if (vm.syncing) "Syncing…" else "Sync now")
+            }
+        }
+        val dim = MaterialTheme.colorScheme.onSurfaceVariant
+        vm.testResult?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = dim) }
+        val last = if (vm.syncLastMs > 0)
+            java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                .format(java.util.Date(vm.syncLastMs)) else "never"
+        Text("Last sync: $last", style = MaterialTheme.typography.bodySmall, color = dim)
+        vm.syncStatus?.takeIf { it != "ok" }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = dim) }
+        vm.syncCounts?.let { raw ->
+            val txt = runCatching {
+                val j = org.json.JSONObject(raw)
+                j.keys().asSequence().joinToString("  ·  ") { "$it ${j.getInt(it)}" }
+            }.getOrNull()
+            if (txt != null) Text(txt, style = MaterialTheme.typography.bodySmall, color = dim)
+        }
     }
 }
 
