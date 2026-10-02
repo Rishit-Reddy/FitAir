@@ -142,10 +142,6 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         return try {
             SyncRepo(applicationContext).syncAll()
             status("ok")
-            // Best effort: a Drive failure must never fail or retry the ingest.
-            try { DriveExport.run(applicationContext, force = false) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Throwable) { AppLog.e("drive export crashed (ignored)", e) }
             Result.success()
         } catch (e: SecurityException) {
             AppLog.e("worker: Health Connect permission", e)

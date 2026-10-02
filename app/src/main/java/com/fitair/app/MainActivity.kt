@@ -54,20 +54,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- google drive ----
     var driveConnected by mutableStateOf(prefs.getBoolean(DrivePrefs.CONNECTED, false)); private set
-    var driveStatus by mutableStateOf<String?>(null); private set
     var driveLastMs by mutableStateOf(0L); private set
-    var driveFiles by mutableStateOf(0); private set
-    var driveUploads by mutableStateOf(0); private set
-    var driveError by mutableStateOf<String?>(null); private set
-    var driveBusy by mutableStateOf(false); private set
+    var driveSizeBytes by mutableStateOf(0L); private set
+    var driveFailedBefore by mutableStateOf(false); private set
+    var driveState by mutableStateOf(BackupState()); private set
+
+    /** Backup progress as shown in Settings: live state, or a remembered failure after a process restart. */
+    val driveShown: BackupState get() =
+        if (driveState.phase == BackupPhase.Idle && driveFailedBefore) BackupState(BackupPhase.Failed, 0) else driveState
 
     private fun loadDrive() {
         driveConnected = prefs.getBoolean(DrivePrefs.CONNECTED, false)
-        driveStatus = prefs.getString(DrivePrefs.STATUS, null)
         driveLastMs = prefs.getLong(DrivePrefs.LAST, 0L)
-        driveFiles = prefs.getInt(DrivePrefs.FILES, 0)
-        driveUploads = prefs.getInt(DrivePrefs.UPLOADS, 0)
-        driveError = prefs.getString(DrivePrefs.ERROR, null)
+        driveSizeBytes = prefs.getLong(DrivePrefs.SIZE, 0L)
+        driveFailedBefore = prefs.getBoolean(DrivePrefs.FAILED, false)
     }
     private val driveListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
         if (k?.startsWith("drive_") == true) loadDrive()
@@ -85,7 +85,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 is DriveAuth.Token -> onDriveConnected()
                 is DriveAuth.Failed -> {
                     AppLog.e("drive: connect failed", a.error)
-                    prefs.edit().putString(DrivePrefs.ERROR, (a.error.message ?: a.error.javaClass.simpleName).take(160)).apply()
                 }
             }
         }
@@ -103,11 +102,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onDriveConnected() {
         AppLog.d("drive: connected")
-        prefs.edit().putBoolean(DrivePrefs.CONNECTED, true).putString(DrivePrefs.STATUS, "Drive: exporting").remove(DrivePrefs.ERROR).apply()
-        DriveScheduler.exportNow(getApplication())
+        prefs.edit().putBoolean(DrivePrefs.CONNECTED, true).putBoolean(DrivePrefs.FAILED, false).apply()
+        DriveScheduler.schedulePeriodic(getApplication())
+        backUpNow()
     }
 
-    fun exportDriveNow() { AppLog.d("drive: Export now tapped"); DriveScheduler.exportNow(getApplication()) }
+    fun backUpNow() {
+        AppLog.d("drive: Back up now tapped")
+        DriveBackup.markQueued()
+        DriveScheduler.backupNow(getApplication())
+    }
 
     // ---- coach chat ----
     private val coachRepo = CoachRepo(app)
@@ -183,9 +187,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         loadDrive()
         prefs.registerOnSharedPreferenceChangeListener(driveListener)
-        viewModelScope.launch {
-            DriveScheduler.nowFlow(app).collect { infos -> driveBusy = infos.any { !it.state.isFinished }; loadDrive() }
-        }
+        if (driveConnected) DriveScheduler.schedulePeriodic(app)
+        viewModelScope.launch { DriveBackup.state.collect { driveState = it; loadDrive() } }
         SyncScheduler.schedulePeriodic(app)
         viewModelScope.launch {
             SyncScheduler.nowFlow(app).collect { infos ->

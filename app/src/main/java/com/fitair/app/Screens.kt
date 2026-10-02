@@ -2,6 +2,7 @@ package com.fitair.app
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -334,24 +335,46 @@ fun SettingsScreen(vm: MainViewModel, onConnectDrive: () -> Unit) {
         Caption("Google Drive")
         Spacer(Modifier.height(8.dp))
         val ddim = MaterialTheme.colorScheme.onSurfaceVariant
+        val bs = vm.driveShown
+        val busy = bs.phase == BackupPhase.Preparing || bs.phase == BackupPhase.Compressing || bs.phase == BackupPhase.Uploading
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (vm.driveConnected) {
                 Text("Connected", style = MaterialTheme.typography.bodyMedium, color = ddim)
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { vm.exportDriveNow() }, enabled = !vm.driveBusy) {
-                    Text(if (vm.driveBusy) "Exporting…" else "Export now")
+                TextButton(onClick = { vm.backUpNow() }, enabled = !busy) {
+                    Text(if (busy) "Backing up…" else "Back up now")
                 }
             } else {
                 TextButton(onClick = onConnectDrive) { Text("Connect Google Drive") }
             }
         }
+        if (vm.driveConnected && bs.phase != BackupPhase.Idle) {
+            val failed = bs.phase == BackupPhase.Failed
+            val label = when (bs.phase) {
+                BackupPhase.Preparing -> "Preparing"
+                BackupPhase.Compressing -> "Compressing"
+                BackupPhase.Uploading -> "Uploading"
+                BackupPhase.Done -> "Done"
+                else -> "Failed — tap to retry"
+            }
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).then(if (failed) Modifier.clickable { vm.backUpNow() } else Modifier)) {
+                Row {
+                    Text(label, style = MaterialTheme.typography.bodySmall, color = if (failed) MaterialTheme.colorScheme.error else ddim, modifier = Modifier.weight(1f))
+                    if (!failed) Text("${bs.pct}%", style = MaterialTheme.typography.bodySmall, color = ddim)
+                }
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { if (failed) 0f else bs.pct / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant,
+                )
+            }
+        }
         val dl = if (vm.driveLastMs > 0)
             java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
-                .format(java.util.Date(vm.driveLastMs)) else "never"
-        Text("Last export: $dl", style = MaterialTheme.typography.bodySmall, color = ddim)
-        if (vm.driveLastMs > 0) Text("${vm.driveFiles} files  ·  ${vm.driveUploads} uploaded last run", style = MaterialTheme.typography.bodySmall, color = ddim)
-        vm.driveStatus?.takeIf { it != "ok" }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ddim) }
-        vm.driveError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                .format(java.util.Date(vm.driveLastMs)) + " · %.1f MB".format(vm.driveSizeBytes / 1048576.0) else "never"
+        Text("Last backup: $dl", style = MaterialTheme.typography.bodySmall, color = ddim)
         Spacer(Modifier.height(24.dp))
         Hairline()
         Spacer(Modifier.height(24.dp))
