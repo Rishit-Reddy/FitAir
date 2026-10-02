@@ -75,7 +75,7 @@ No guilt, no exclamation marks, no medical claims or diagnoses, no new plans for
     fun numbersValid(text: String, allowed: List<Double>): Boolean =
         numbersIn(text).all { n -> allowed.any { Math.abs(it - n.value) <= n.tol } }
 
-    private val BANNED = Regex("diagnos|disease|infection|illness|medicat|doctor|clinic|symptom|!", RegexOption.IGNORE_CASE)
+    internal val BANNED = Regex("diagnos|disease|infection|illness|medicat|doctor|clinic|symptom|!", RegexOption.IGNORE_CASE)
 
     /** The full acceptance test for a model reply: non-empty, <= 60 words, no exclamation / medical words, only known numbers. */
     fun accept(text: String?, allowed: List<Double>): Boolean {

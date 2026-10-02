@@ -25,8 +25,9 @@ private val TealDark = Color(0xFF6FB8B1)
 
 private val LightScheme = lightColorScheme(
     primary = Teal, onPrimary = Color.White,
-    background = Color(0xFFFAFAF9), onBackground = Color(0xFF161616),
-    surface = Color(0xFFFAFAF9), onSurface = Color(0xFF161616),
+    background = Color(0xFFF5F5F3), onBackground = Color(0xFF161616),
+    surface = Color(0xFFF5F5F3), onSurface = Color(0xFF161616),
+    surfaceContainer = Color(0xFFFFFFFF), surfaceContainerHigh = Color(0xFFF2F3F1),
     surfaceVariant = Color(0xFFF0F0EE), onSurfaceVariant = Color(0xFF666662),
     outlineVariant = Color(0xFFE2E2DF), outline = Color(0xFFB8B8B4),
     secondaryContainer = Color(0xFFE3EFED), onSecondaryContainer = Color(0xFF1F4E4A),
@@ -35,8 +36,9 @@ private val LightScheme = lightColorScheme(
 
 private val DarkScheme = darkColorScheme(
     primary = TealDark, onPrimary = Color(0xFF0B1514),
-    background = Color(0xFF0F0F0F), onBackground = Color(0xFFEDEDEB),
-    surface = Color(0xFF0F0F0F), onSurface = Color(0xFFEDEDEB),
+    background = Color(0xFF0E0F0F), onBackground = Color(0xFFEDEDEB),
+    surface = Color(0xFF0E0F0F), onSurface = Color(0xFFEDEDEB),
+    surfaceContainer = Color(0xFF18191A), surfaceContainerHigh = Color(0xFF222423),
     surfaceVariant = Color(0xFF1A1A1A), onSurfaceVariant = Color(0xFF8C8C88),
     outlineVariant = Color(0xFF2A2A2A), outline = Color(0xFF4A4A48),
     secondaryContainer = Color(0xFF1E3532), onSecondaryContainer = Color(0xFFBFE0DC),
@@ -53,6 +55,8 @@ private val AppTypography = Typography(
     labelLarge = Type.label,
     labelMedium = Type.label,
     labelSmall = Type.caption,
+    titleLarge = Type.headerDate,
+    headlineSmall = Type.pageTitle,
 )
 
 @Composable

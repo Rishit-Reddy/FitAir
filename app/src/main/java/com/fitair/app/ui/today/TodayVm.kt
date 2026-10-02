@@ -16,7 +16,12 @@ import com.fitair.app.SyncScheduler
 import com.fitair.app.analytics.ReadinessView
 import com.fitair.app.coach.DayFacts
 import com.fitair.app.coach.DaySummary
-import com.fitair.app.coach.SummaryText
+import com.fitair.app.coach.Brief
+import com.fitair.app.coach.TodayBrief
+import com.fitair.app.data.metrics.MetricId
+import com.fitair.app.data.metrics.MetricSnapshot
+import com.fitair.app.data.metrics.MetricsRepo
+import kotlinx.coroutines.Job
 import com.fitair.app.core.Format
 import com.fitair.app.data.dao.LoadDao
 import com.fitair.app.data.dao.LoadToday
@@ -41,82 +46,47 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-/** A vital tile: plain [verdict] first, the number in its detail. */
-class Vital(val label: String, val verdict: Verdict) { var dest: TodayDest? = null }
-
-/** Last night on Today: duration, window, score, difference to the personal need, 7-day debt and stage minutes. */
-class SleepNight(
-    val durationMin: Long, val window: String?, val score: Double?, val needDiffMin: Double?, val debt: String?, val stages: StageMinutes?,
-)
-
 class Insight(val title: String, val alert: Boolean, val id: String = "")
 
-/** Today's content blocks. `card` blocks sit on surfaceVariant and are separated by a gap instead of a hairline. */
-enum class TodayBlock(val card: Boolean) {
-    Readiness(false), ReadinessCompact(false),
-    Sleep(true), SleepLine(true),
-    Vitals(true),
-    NextUp(true), Agenda(false), AgendaRest(false),
-    Load(true), Water(true),
-    DaySummary(true), Tomorrow(false), WindDown(false),
-    Insights(false),
+/** What sits below the big card, in order (docs/PLAN_090 6.3). */
+enum class Below { NextUp, Water, Alert }
+
+/** Today's big card: the two large and three small metric cards for a mode, plus the strips under it. */
+class TodayLayout(val large: List<MetricId>, val small: List<MetricId>, val below: List<Below>)
+
+/**
+ * The layout for [mode] (docs/PLAN_090 6.1). Day and Evening share the large pair; only the small trio rotates.
+ * [waterOpen] = the water window has not ended; [alert] = an alert-level insight exists (shown as one line).
+ */
+fun todayLayout(mode: Mode, waterOpen: Boolean = true, alert: Boolean = false): TodayLayout {
+    val (large, small) = when (mode) {
+        Mode.Morning -> listOf(MetricId.Readiness, MetricId.Sleep) to listOf(MetricId.Hrv, MetricId.RestingHr, MetricId.Load)
+        Mode.Day -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Readiness, MetricId.Sleep, MetricId.Energy)
+        Mode.Evening -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Energy, MetricId.Steps, MetricId.Bedtime)
+    }
+    return TodayLayout(large, small, buildList {
+        add(Below.NextUp)
+        if (waterOpen) add(Below.Water)
+        if (alert) add(Below.Alert)
+    })
 }
 
 /** Insight ids that stay on Today in the evening (load and sleep debt only). */
 val EVENING_INSIGHTS = setOf("acwr_high", "sleep_debt")
 
-/**
- * The block list for [mode] (docs/PLAN_081.md 3.5). Collapsed blocks (compact readiness, sleep line) become their full
- * form when they are in [expanded]. [agendaLeft] says whether today still has events (Evening shows the rest of today only then).
- */
-fun todayBlocks(ui: TodayUi, mode: Mode = Mode.Morning, expanded: Set<TodayBlock> = emptySet(), agendaLeft: Boolean = true): List<TodayBlock> = buildList {
-    fun readiness(compact: Boolean) = if (compact && TodayBlock.ReadinessCompact !in expanded) TodayBlock.ReadinessCompact else TodayBlock.Readiness
-    fun sleep() = if (ui.night != null && TodayBlock.SleepLine in expanded) TodayBlock.Sleep else TodayBlock.SleepLine
-    val insights = if (mode == Mode.Evening) ui.insights.filter { it.id in EVENING_INSIGHTS } else ui.insights
-    when (mode) {
-        Mode.Morning -> {
-            add(TodayBlock.Readiness)
-            add(if (ui.night != null) TodayBlock.Sleep else TodayBlock.SleepLine)
-            add(TodayBlock.Vitals)
-            add(TodayBlock.Agenda)
-            add(TodayBlock.Water)
-        }
-        Mode.Day -> {
-            add(TodayBlock.NextUp)
-            add(TodayBlock.Water)
-            add(TodayBlock.AgendaRest)
-            add(readiness(true))
-            add(TodayBlock.Load)
-            add(sleep())
-        }
-        Mode.Evening -> {
-            add(TodayBlock.DaySummary)
-            add(TodayBlock.Tomorrow)
-            add(TodayBlock.Water)
-            if (ui.windDown != null) add(TodayBlock.WindDown)
-            if (agendaLeft) add(TodayBlock.AgendaRest)
-        }
-    }
-    if (insights.isNotEmpty()) add(TodayBlock.Insights)
-}
-
 data class TodayUi(
     val date: LocalDate,
     val readiness: ReadinessView?,
     val lastSyncMs: Long,
-    val vitals: List<Vital>,
-    val night: SleepNight?,
     val insights: List<Insight>,
     val hasData: Boolean,
     val wake: WakeInfo? = null,
     val water: WaterToday? = null,
-    val load: LoadToday? = null,
     /** Newest heart-rate bucket (ms), shown as "data to 14:05". */
     val dataToMs: Long? = null,
-    /** Latest heart rate within the last 30 minutes, for the compact readiness line. */
-    val hrNow: Int? = null,
-    val restingHr: Int? = null,
-    val windDown: WindDown? = null,
+    /** Everything the metric cards show (null while the first snapshot is being built). */
+    val snapshot: MetricSnapshot? = null,
+    /** Today's fact grid for the Details sheet. */
     val facts: DayFacts? = null,
     val glassMl: Int = 250,
 )
@@ -133,8 +103,10 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
     var mode by mutableStateOf<Mode?>(null); private set
     var syncing by mutableStateOf(false); private set
     var error by mutableStateOf<String?>(null); private set
-    var summary by mutableStateOf<SummaryText?>(null); private set
-    var summaryLoading by mutableStateOf(false); private set
+    /** The three summary bullets: the rules text at once, replaced when the model text arrives. Never blocks the screen. */
+    var brief by mutableStateOf<Brief?>(null); private set
+    private var briefJob: Job? = null
+    private var briefKey: String? = null
     var logged by mutableStateOf<LoggedWater?>(null); private set
     /** One quiet line after a sync: what it found ("no newer data from Google Health"), cleared after ~10 s. */
     var syncNote by mutableStateOf<String?>(null); private set
@@ -143,7 +115,6 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
     private var touched = false
     private var openedAtMs = 0L
     private var modeOnSyncEnd = false
-    private var summaryDate: LocalDate? = null
 
     init {
         load(setMode = true)
@@ -242,32 +213,47 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
 
     private suspend fun reloadWater() {
         val cur = ui ?: return
-        val w = withContext(Dispatchers.IO) { WaterDao.today(getApplication()) }
-        val f = cur.facts?.let { withContext(Dispatchers.IO) { DaySummary.facts(getApplication(), cur.date) } }
-        ui = cur.copy(water = w, facts = f ?: cur.facts)
+        val ctx = getApplication<Application>()
+        val (w, snap, f) = withContext(Dispatchers.IO) {
+            MetricsRepo.invalidate()
+            Triple(WaterDao.today(ctx), runCatching { MetricsRepo.snapshot(ctx, cur.date) }.getOrNull(), runCatching { DaySummary.facts(ctx, cur.date) }.getOrNull())
+        }
+        ui = cur.copy(water = w, snapshot = snap ?: cur.snapshot, facts = f ?: cur.facts)
+        refreshBriefTemplate()
     }
 
-    // ---- evening summary -------------------------------------------------------------------------------------
+    // ---- three-bullet summary --------------------------------------------------------------------------------
 
-    /** Loads the cached summary (one model call per evening); [regenerate] asks for a new one. Falls back to the rules text. */
-    fun ensureSummary(regenerate: Boolean = false) {
+    /**
+     * Shows the rules bullets for the current facts at once, then asks [TodayBrief.get] (cached, hash-gated, at most 6 model calls
+     * a day, strict validation) and swaps the text in when it arrives. One run per (date, mode, data version); a refresh forces one.
+     */
+    fun ensureBrief(force: Boolean = false) {
         val u = ui ?: return
-        val facts = u.facts ?: return
-        if (!facts.hasData) return
-        if (!regenerate && summaryDate == u.date && summary != null) return
-        if (summaryLoading) return
-        summaryLoading = true
+        val m = mode ?: return
+        val key = "${u.date}|$m|${u.lastSyncMs}|${u.dataToMs}"
+        if (!force && key == briefKey && brief != null) return
+        briefKey = key
+        briefJob?.cancel()
+        val ctx = getApplication<Application>()
+        briefJob = viewModelScope.launch {
+            val now = withContext(Dispatchers.IO) { try { TodayBrief.templateNow(ctx, u.date, m) } catch (e: Exception) { null } }
+            if (now != null && now.bullets.size == 3) brief = now
+            val full = try { withContext(Dispatchers.IO) { TodayBrief.get(ctx, u.date, m) } }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { AppLog.d("today brief failed: ${e.message}"); null }
+            if (full != null && full.bullets.size == 3) brief = full
+        }
+    }
+
+    /** Rules bullets for the current numbers only (after a water entry), no model call. */
+    private fun refreshBriefTemplate() {
+        val u = ui ?: return
+        val m = mode ?: return
+        val ctx = getApplication<Application>()
         viewModelScope.launch {
-            val r = try {
-                withContext(Dispatchers.IO) { DaySummary.text(getApplication(), u.date, regenerate) }
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) {
-                AppLog.d("day summary failed: ${e.message}")
-                SummaryText(Copy.daySummary(facts), "template", System.currentTimeMillis())
-            }
-            summary = if (r.text.isBlank()) SummaryText(Copy.daySummary(facts), "template", r.createdMs) else r
-            summaryDate = u.date
-            summaryLoading = false
+            val t = withContext(Dispatchers.IO) { try { TodayBrief.templateNow(ctx, u.date, m) } catch (e: Exception) { null } }
+            if (t != null && t.bullets.size == 3) brief = t
         }
     }
 
@@ -279,33 +265,15 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         val today = LocalDate.now(z)
         val nowMs = System.currentTimeMillis()
         DailyMetrics.ensure(ctx, today.minusDays(28).toString(), today.toString())
-        val rows = LocalStore.get(ctx).getDaily(today.minusDays(28).toString(), today.toString())
-        val row = rows.firstOrNull { it.optString("date") == today.toString() }
-        val hist = rows.filter { it.optString("date") != today.toString() }
-        fun col(k: String) = hist.filter { it.has(k) }.map { it.getDouble(k) }
-
+        val row = LocalStore.get(ctx).getDaily(today.toString(), today.toString()).firstOrNull { it.optString("date") == today.toString() }
         val readiness = ReadinessView.parse(row?.optString("readiness_json"))
-        val sleepJson = row?.optString("sleep_json")?.takeIf { it.isNotEmpty() && it != "null" }?.let { JSONObject(it) }
-
-        val vitals = ArrayList<Vital>()
-        val sleepMin = row?.takeIf { it.has("sleep_min") }?.getLong("sleep_min")
-        vitals.add(vital("Recovery signal", row, "hrv", col("hrv"), hrv = true, minDelta = 2.0))
-        vitals.add(vital("Resting heart rate", row, "rhr", col("rhr"), hrv = false, minDelta = 1.0))
-        vitals[0].dest = TodayDest.Hrv; vitals[1].dest = TodayDest.RestingHr
-
         val wake = WakeDao.get(ctx, nowMs)
-        val need = sleepJson?.optDouble("need_min", Double.NaN)?.takeIf { !it.isNaN() }
-        val debt = sleepJson?.optDouble("sleep_debt_min", 0.0)
-        val evening = todayMode(LocalDateTime.now(z), wake, z) == Mode.Evening
-        val (dataTo, hrNow) = latestHeart(ctx, nowMs)
+        val (dataTo, _) = latestHeart(ctx, nowMs)
+        val snap = try { MetricsRepo.snapshot(ctx, today) } catch (e: Exception) { AppLog.e("snapshot failed", e); null }
         return TodayUi(
-            date = today, readiness = readiness, lastSyncMs = prefs.getLong(SyncPrefs.LAST, 0L), vitals = vitals,
-            night = sleepNight(ctx, z, today, sleepMin, sleepJson), insights = insights(row), hasData = row != null,
-            wake = wake, water = WaterDao.today(ctx), load = LoadDao.today(ctx),
-            dataToMs = dataTo, hrNow = hrNow, restingHr = row?.takeIf { it.has("rhr") }?.getDouble("rhr")?.let { Math.round(it).toInt() },
-            windDown = windDown(wake.usualWakeMin, need, debt),
-            facts = if (evening) DaySummary.facts(ctx, today) else null,
-            glassMl = WaterDao.glassMl(ctx),
+            date = today, readiness = readiness, lastSyncMs = prefs.getLong(SyncPrefs.LAST, 0L),
+            insights = insights(row), hasData = row != null, wake = wake, water = WaterDao.today(ctx), dataToMs = dataTo,
+            snapshot = snap, facts = runCatching { DaySummary.facts(ctx, today) }.getOrNull(), glassMl = WaterDao.glassMl(ctx),
         )
     }
 
@@ -320,41 +288,6 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
             } else null to null
         }
     } catch (e: Exception) { null to null }
-
-    private fun vital(label: String, row: JSONObject?, key: String, hist: List<Double>, hrv: Boolean, minDelta: Double): Vital {
-        val v = row?.takeIf { it.has(key) }?.getDouble(key) ?: return Vital(label, Verdict(Format.DASH))
-        return Vital(label, Copy.vital(hrv, v, Format.baseline(hist), minDelta))
-    }
-
-    private fun sleepNight(ctx: Context, z: ZoneId, today: LocalDate, sleepMin: Long?, sj: JSONObject?): SleepNight? {
-        if (sleepMin == null) return null
-        val (lo, hi) = LocalApi.bounds(today, z)
-        var window: String? = null
-        var stages: StageMinutes? = null
-        val db = LocalStore.get(ctx).db
-        db.rawQuery("SELECT start_ms,end_ms,origin FROM sleep WHERE end_ms>=? AND end_ms<? ORDER BY end_ms-start_ms DESC LIMIT 1",
-            arrayOf(lo.toString(), hi.toString())).use {
-            if (it.moveToFirst()) {
-                val start = it.getLong(0); val end = it.getLong(1); val origin = it.getString(2)
-                val a = Instant.ofEpochMilli(start).atZone(z); val b = Instant.ofEpochMilli(end).atZone(z)
-                window = "${Format.clock(a.hour, a.minute)} – ${Format.clock(b.hour, b.minute)}"
-                if (origin != null) {
-                    // same grouping as SleepVm.queryDetail so Today and Sleep show identical minutes
-                    val by = HashMap<Int, Double>()
-                    db.rawQuery("SELECT stage, sum(end_ms-start_ms)/60000.0 FROM sleep_stage WHERE sleep_start_ms=? AND origin=? GROUP BY stage",
-                        arrayOf(start.toString(), origin)).use { c -> while (c.moveToNext()) by[c.getInt(0)] = c.getDouble(1) }
-                    stages = SleepModel.stageMinutes(by).takeIf { s -> !s.isEmpty }
-                }
-            }
-        }
-        val score = sj?.takeIf { !it.isNull("score") }?.optDouble("score")?.takeIf { !it.isNaN() }
-        val need = sj?.optDouble("need_min", Double.NaN)?.takeIf { !it.isNaN() }
-        val debt = sj?.optDouble("sleep_debt_min", 0.0) ?: 0.0
-        return SleepNight(
-            durationMin = sleepMin, window = window, score = score, needDiffMin = need?.let { sleepMin - it },
-            debt = if (debt >= 60) Format.duration(Math.round(debt)) else null, stages = stages,
-        )
-    }
 
     private fun insights(row: JSONObject?): List<Insight> {
         val arr = try { JSONArray(row?.optString("insights_json").takeUnless { it.isNullOrEmpty() } ?: "[]") } catch (e: Exception) { JSONArray() }

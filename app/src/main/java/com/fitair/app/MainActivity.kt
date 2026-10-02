@@ -34,6 +34,12 @@ import com.fitair.app.ui.settings.SettingsScreen
 import com.fitair.app.ui.theme.FitAirTheme
 import com.fitair.app.ui.theme.ThemeMode
 import com.fitair.app.ui.today.TodayDest
+import com.fitair.app.ui.today.destFor
+import com.fitair.app.ui.metrics.MetricsScreen
+import com.fitair.app.ui.metrics.HeartDayScreen
+import com.fitair.app.ui.metrics.DailyTotalScreen
+import com.fitair.app.data.metrics.MetricId
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import com.fitair.app.ui.today.TodayScreen
 import com.fitair.app.ui.trends.TrendMetric
 import com.fitair.app.ui.trends.TrendScreen
@@ -222,9 +228,10 @@ private class TabSpec(val label: String, val off: androidx.compose.ui.graphics.v
 
 @Composable
 private fun MainContent(vm: MainViewModel) {
-    // Today · Calendar · Coach · Log. Settings is behind the gear on Today.
+    // Today · Metrics · Calendar · Coach · Log. Settings is behind the gear on Today.
     val tabs = listOf(
         TabSpec("Today", NavIcons.TodayOutline, NavIcons.TodayFilled),
+        TabSpec("Metrics", NavIcons.MetricsOutline, NavIcons.MetricsFilled),
         TabSpec("Calendar", NavIcons.CalendarOutline, NavIcons.CalendarFilled),
         TabSpec("Coach", NavIcons.CoachOutline, NavIcons.CoachFilled),
         TabSpec("Log", NavIcons.LogOutline, NavIcons.LogFilled),
@@ -236,6 +243,7 @@ private fun MainContent(vm: MainViewModel) {
     var dest by rememberSaveable { mutableStateOf<TodayDest?>(null) }
     // hoisted so Today keeps its scroll position while a detail screen is open
     val todayScroll = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
+    val metricsGrid = rememberLazyGridState()
     BackHandler(enabled = dest != null) { dest = null }
     if (dest != null) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
@@ -247,6 +255,11 @@ private fun MainContent(vm: MainViewModel) {
                 TodayDest.Hrv -> TrendScreen(TrendMetric.Hrv) { dest = null }
                 TodayDest.RestingHr -> TrendScreen(TrendMetric.RestingHr) { dest = null }
                 TodayDest.Load -> LoadScreen(onBack = { dest = null })
+                TodayDest.Heart -> HeartDayScreen(onBack = { dest = null })
+                TodayDest.Steps -> DailyTotalScreen(MetricId.Steps, onBack = { dest = null })
+                TodayDest.Energy -> DailyTotalScreen(MetricId.Energy, onBack = { dest = null })
+                TodayDest.Distance -> DailyTotalScreen(MetricId.Distance, onBack = { dest = null })
+                TodayDest.Water -> DailyTotalScreen(MetricId.Water, onBack = { dest = null })
                 TodayDest.Settings -> Column(Modifier.fillMaxSize()) {
                     DetailHeader("Settings", onBack = { dest = null })
                     Box(Modifier.weight(1f)) { SettingsScreen(vm) }
@@ -281,9 +294,11 @@ private fun MainContent(vm: MainViewModel) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(todayVm, onOpen = { if (it == TodayDest.Agenda) tab = 1 else dest = it }, scroll = todayScroll, onOpenCalendar = { tab = 1 })
-                1 -> AgendaScreen(onBack = null, onOpenSettings = { dest = TodayDest.Settings })
-                2 -> CoachScreen(coachVm)
+                0 -> TodayScreen(todayVm, onOpen = { if (it == TodayDest.Agenda) tab = 2 else dest = it }, scroll = todayScroll, onOpenCalendar = { tab = 2 })
+                // a detail opened from here returns here: `tab` is not touched while `dest` is open
+                1 -> MetricsScreen(onOpen = { id -> destFor(id)?.let { dest = it } }, gridState = metricsGrid)
+                2 -> AgendaScreen(onBack = null, onOpenSettings = { dest = TodayDest.Settings })
+                3 -> CoachScreen(coachVm)
                 else -> LogScreen(vm)
             }
         }

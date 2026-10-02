@@ -33,7 +33,7 @@ object BackupFiles {
         "ai_call" to Col("ts", false), "chat_msg" to Col("ts", false),
         "load_day" to Col("date", true), "exercise_flag" to Col("start_ms", false), "weight" to Col("t", false),
         "chat_session" to Col("created_ms", false), "chat_turn" to Col("ts", false), "water" to Col("t", false),
-        "day_summary" to Col("date", true),
+        "day_summary" to Col("date", true), "day_brief" to Col("date", true),
     )
 
     fun tablesOf(db: SQLiteDatabase): List<String> {

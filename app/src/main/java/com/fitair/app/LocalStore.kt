@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
-/** Local SQLite copy of the health data plus the app tables (schema v4, see docs/ARCHITECTURE.md 3.2 and docs/PLAN_081.md 4.1). */
+/** Local SQLite copy of the health data plus the app tables (schema v5, see docs/ARCHITECTURE.md 3.2 and docs/PLAN_081.md 4.1). */
 class LocalStore private constructor(private val ctx: Context) :
     SQLiteOpenHelper(ctx.applicationContext, FILE, null, VERSION) {
 
@@ -14,10 +14,10 @@ class LocalStore private constructor(private val ctx: Context) :
 
     companion object {
         const val FILE = "fitair.db"
-        const val VERSION = 4
+        const val VERSION = 5
         /** Tables added in schema v3 (not part of the sync/backup health tables in [TABLES]). */
         val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg",
-            "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary")
+            "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary", "day_brief")
         val TABLES = listOf(
             "heart_rate", "steps", "distance", "total_calories", "resting_hr",
             "hrv", "respiratory_rate", "sleep", "sleep_stage", "exercise",
@@ -64,6 +64,7 @@ class LocalStore private constructor(private val ctx: Context) :
         createV2(db)
         createV3(db)
         createV4(db)
+        createV5(db)
         // fresh install: nothing to migrate
         db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES('$MIG_DONE','1')")
     }
@@ -118,11 +119,18 @@ class LocalStore private constructor(private val ctx: Context) :
         s.forEach { db.execSQL(it) }
     }
 
+    /** Schema v5 (docs/PLAN_090 6.2): the Today summary cache, one row per (date, part of day). Additive only. */
+    private fun createV5(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS day_brief(date TEXT NOT NULL, part TEXT NOT NULL, facts_hash TEXT NOT NULL, facts_json TEXT, " +
+            "bullets_json TEXT NOT NULL, source TEXT NOT NULL, model TEXT, created_ms INTEGER NOT NULL, PRIMARY KEY(date, part))")
+    }
+
     /** Cheap schema-only upgrade; the heavy heart-rate rebuild runs later in [migrateHeartRate] (IO thread). */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2(db)
         if (oldVersion < 3) createV3(db)
         if (oldVersion < 4) createV4(db)
+        if (oldVersion < 5) createV5(db)
         // never drop anything here
     }
 

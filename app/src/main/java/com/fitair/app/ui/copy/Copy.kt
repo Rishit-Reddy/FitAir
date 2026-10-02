@@ -1,9 +1,16 @@
 package com.fitair.app.ui.copy
 
 import com.fitair.app.coach.DayFacts
+import com.fitair.app.coach.BriefEvent
+import com.fitair.app.coach.BriefFacts
 import com.fitair.app.core.Format
+import com.fitair.app.data.metrics.MetricStats
 import com.fitair.app.data.dao.Pace
+import com.fitair.app.ui.components.Chip
+import com.fitair.app.ui.components.Tiers
 import com.fitair.app.ui.components.Tone
+import com.fitair.app.ui.today.Mode
+import com.fitair.app.ui.trends.Band
 import java.util.Locale
 
 /**
@@ -223,5 +230,208 @@ object Copy {
         val m = ((bedMin % 1440) + 1440) % 1440
         val clock = Format.clock(m / 60, m % 60)
         return "For your usual ${Format.duration(needMin.toLong())}, be in bed by $clock" + if (short) " (you're short on sleep)" else ""
+    }
+
+    // ---- 0.9.0 status chips (docs/PLAN_090 section 5): dot + words, colour only against his own normal ----------
+
+    const val BAND_MIN_DAYS = 14
+
+    fun chipLearning(days: Int) = Chip("Learning your normal · ${days.coerceIn(0, BAND_MIN_DAYS - 1)}/$BAND_MIN_DAYS", Tone.Neutral, "Learning ${days.coerceIn(0, BAND_MIN_DAYS - 1)}/$BAND_MIN_DAYS")
+
+    val CHIP_NO_DATA = Chip("No data", Tone.Neutral)
+
+    fun chipReadiness(score: Int?): Chip? = when {
+        score == null -> null
+        score >= 70 -> Chip("Well recovered", Tone.Good, "Recovered")
+        score >= 50 -> Chip("Partly recovered", Tone.Caution, "Partly")
+        else -> Chip("Not recovered", Tone.Alert, "Low")
+    }
+
+    /** Sleep against the personal need: "Need met" / "45m short" / "1h 30m short". */
+    fun chipSleep(asleepMin: Double?, needMin: Double?): Chip? {
+        if (asleepMin == null || needMin == null) return null
+        val tone = Tiers.duration(asleepMin, needMin)
+        if (tone == Tone.Good) return Chip("Need met", Tone.Good)
+        val gap = Format.hm(Math.round(needMin - asleepMin))
+        return Chip("$gap short", tone, "−$gap")
+    }
+
+    /** Resting heart rate against his usual range (A's tone edges: +1 SD amber, +2 SD red; below = good). */
+    fun chipResting(v: Double?, b: Band?, bandDays: Int): Chip? {
+        if (v == null) return null
+        if (b == null || bandDays < BAND_MIN_DAYS) return chipLearning(bandDays)
+        return when (MetricStats.rhrTone(v, b)) {
+            Tone.Alert -> Chip("High for you", Tone.Alert, "High")
+            Tone.Caution -> Chip("A bit high", Tone.Caution, "A bit high")
+            else -> if (v < b.lo) Chip("Low", Tone.Good) else Chip("Usual for you", Tone.Good, "Usual")
+        }
+    }
+
+    /** Recovery signal against his usual range (-1 SD amber, -2 SD red; above = good). */
+    fun chipHrv(v: Double?, b: Band?, bandDays: Int): Chip? {
+        if (v == null) return null
+        if (b == null || bandDays < BAND_MIN_DAYS) return chipLearning(bandDays)
+        return when (MetricStats.hrvTone(v, b)) {
+            Tone.Alert -> Chip("Low for you", Tone.Alert, "Low")
+            Tone.Caution -> Chip("Lower than usual", Tone.Caution, "Lower")
+            else -> if (v > b.hi) Chip("Strong", Tone.Good) else Chip("Usual for you", Tone.Good, "Usual")
+        }
+    }
+
+    /** Week chip from the acute:chronic ratio; the words come from [load] but shorter. */
+    fun chipLoad(ratio: Double?): Chip? = when {
+        ratio == null -> null
+        ratio < 0.8 -> Chip("Lighter week", Tone.Neutral, "Lighter")
+        ratio <= 1.3 -> Chip("Normal week", Tone.Good, "Normal")
+        ratio <= 1.5 -> Chip("Harder week", Tone.Caution, "Harder")
+        else -> Chip("Much harder", Tone.Alert, "Much more")
+    }
+
+    val CHIP_PARTIAL = Chip("Partial day", Tone.Neutral, "Partial")
+
+    private val ZONE_NAMES = listOf("Resting", "Light", "Moderate", "Vigorous", "Peak")
+
+    /** Zone of the latest heart reading from the four zone start thresholds (Light, Moderate, Vigorous, Peak). */
+    fun heartZone(bpm: Int?, zoneBpm: FloatArray?): String? {
+        if (bpm == null || zoneBpm == null || zoneBpm.size < 4) return null
+        return ZONE_NAMES[MetricStats.zoneIndex(bpm.toDouble(), zoneBpm)]
+    }
+
+    fun chipHeart(bpm: Int?, zoneBpm: FloatArray?): Chip? = heartZone(bpm, zoneBpm)?.let { Chip(it, Tone.Neutral) }
+
+    /** Neutral chip of a total: "7-day avg 2,310", "This week 82 km". */
+    fun chipNeutral(text: String?): Chip? = text?.let { Chip(it, Tone.Neutral) }
+
+    /** Weight: "Down 3.0 kg since 12 Sep" (neutral). */
+    fun chipWeight(deltaKg: Double, sinceLabel: String): Chip? {
+        if (Math.abs(deltaKg) < 0.05) return Chip("Steady since $sinceLabel", Tone.Neutral)
+        return Chip((if (deltaKg < 0) "Down " else "Up ") + String.format(Locale.US, "%.1f", Math.abs(deltaKg)) + " kg since $sinceLabel", Tone.Neutral)
+    }
+
+    /** Sentence for TalkBack: "Resting heart rate, 53 beats per minute, in your usual range. Opens details." */
+    fun cardA11y(title: String, valueWords: String?, chip: Chip?, stale: Boolean = false): String {
+        val v = valueWords ?: "no data yet"
+        val c = chip?.let { ", " + it.text.replace(" · ", ", ").replaceFirstChar { ch -> ch.lowercase() } } ?: ""
+        return "$title, $v$c${if (stale) ", not up to date" else ""}. Opens details."
+    }
+
+    /** Units in words for TalkBack. */
+    fun unitWords(unit: String?): String = when (unit) {
+        "bpm" -> "beats per minute"; "ms" -> "milliseconds"; "kcal" -> "kilocalories"; "km" -> "kilometres"; "kg" -> "kilograms"
+        "L" -> "litres"; "/100" -> "out of 100"; null, "" -> ""; else -> unit
+    }
+
+    // ---- 0.9.0 summary bullets (docs/PLAN_090 6.2): the rules text, always exactly three, each at most 90 characters -------------
+
+    const val BULLET_MAX = 90
+
+    private fun cap(s: String): String =
+        if (s.length <= BULLET_MAX) s else s.take(BULLET_MAX - 1).trimEnd(' ', ',', '.', ';', ':').let { it.substringBeforeLast(' ', it) } + "…"
+
+    private fun driverPhrase(key: String?) = when (key) {
+        "hrv" -> "your recovery signal"; "resting_hr" -> "your resting heart rate"; "sleep" -> "your sleep"
+        "load" -> "recent training load"; "subjective" -> "how you said you feel"; else -> null
+    }
+
+    private fun away(e: BriefEvent): String {
+        val m = e.minutesAway
+        return when { m == null -> ""; m <= 0 -> ", now"; else -> ", in " + Format.hm(m.toLong()) }
+    }
+
+    /** Three plain bullets for [mode] from [f]; the model only rewords these facts. Pure, no network. */
+    fun brief(mode: Mode, f: BriefFacts): List<String> = when (mode) {
+        Mode.Morning -> listOf(briefRecovery(f), briefSleep(f), briefShape(f))
+        Mode.Day -> listOf(briefLoad(f), briefWater(f), briefNext(f))
+        Mode.Evening -> listOf(briefDayWent(f), briefEveningFact(f), briefTomorrow(f))
+    }.map { cap(it) }
+
+    private fun briefRecovery(f: BriefFacts): String {
+        val v = readiness(f.readiness)
+        if (f.readiness == null) return "Readiness appears once your sleep has synced."
+        val d = driverPhrase(f.driverKey)
+        return "${v.headline} at ${f.readiness}" + if (d != null) ", mostly from $d." else "."
+    }
+
+    private fun briefSleep(f: BriefFacts): String {
+        val a = f.sleepAsleepMin ?: return "No sleep recorded for last night yet."
+        val need = f.sleepNeedMin
+        val diff = need?.let { a - it }
+        val head = "Slept ${Format.hm(a.toLong())}"
+        val tail = when {
+            diff == null -> "."
+            Math.abs(diff) <= 15 -> ", your need is met."
+            diff < 0 -> ", ${Format.hm((-diff).toLong())} short of your need."
+            else -> ", ${Format.hm(diff.toLong())} more than you need."
+        }
+        val debt = f.sleepDebtMin?.takeIf { it >= 60 }?.let { " Short over the week: ${Format.hm(it.toLong())}." } ?: ""
+        return head + tail + debt
+    }
+
+    private fun briefShape(f: BriefFacts): String {
+        val hint = readiness(f.readiness).detail?.replaceFirstChar { it.uppercase() }?.let { "$it." }
+        val e = f.nextEvent
+        if (e == null) return "Nothing on your calendar yet." + (hint?.let { " $it" } ?: "")
+        val base = "First up: ${e.title} at ${e.startClock}."
+        return if (hint != null && base.length + 1 + hint.length <= BULLET_MAX) "$base $hint" else base
+    }
+
+    private fun briefLoad(f: BriefFacts): String {
+        val so = f.loadSoFar ?: return "No load recorded yet today."
+        val v = loadSoFar(so.toDouble(), f.loadTypicalByNow?.toDouble(), f.partial)
+        return when {
+            f.loadTypicalByNow == null -> "Load $so so far; still learning your usual."
+            else -> "Load $so so far, " + v.headline.removeSuffix(" so far").replaceFirstChar { it.lowercase() }.replace("than usual", "than usual") + "."
+        }
+    }
+
+    private fun briefWater(f: BriefFacts): String {
+        val ml = f.waterMl ?: return "Water: log a glass when you have one."
+        val goal = f.waterGoalMl ?: return "Water so far: ${litres(ml)} L."
+        val tail = when (f.waterPace) { "reached" -> "goal reached"; "behind" -> "a glass would help"; else -> "on pace" }
+        return "Water ${waterLine(ml, goal)}, $tail."
+    }
+
+    private fun briefNext(f: BriefFacts): String {
+        val e = f.nextEvent ?: return "Nothing else on your calendar today."
+        return "Next: ${e.title} at ${e.startClock}${away(e)}."
+    }
+
+    private fun briefDayWent(f: BriefFacts): String {
+        val so = f.loadSoFar
+        val typical = f.loadTypicalByNow
+        val work = if (f.workouts > 0) "You fitted in a workout. " else ""
+        return when {
+            so == null -> work.ifEmpty { "A quiet day." }.trim()
+            typical == null -> work + "Load $so today."
+            so < typical * 0.75 -> work + "A lighter day than usual, load $so."
+            so <= typical * 1.25 -> work + "About a usual day, load $so."
+            else -> work + "A heavier day than usual, load $so."
+        }
+    }
+
+    private fun briefEveningFact(f: BriefFacts): String {
+        val water = f.waterMl?.let { ml -> f.waterGoalMl?.let { "Water ${waterLine(ml, it)}" } ?: "Water ${litres(ml)} L" }
+        val steps = f.steps?.takeIf { it > 0 }?.let { "${Format.compactCount(it)} steps" }
+        return listOfNotNull(water, steps).joinToString("; ").ifEmpty { "Not much logged today." } + "."
+    }
+
+    private fun briefTomorrow(f: BriefFacts): String {
+        val e = f.tomorrowFirst
+        val bed = f.bedtime?.let { b -> "Bed by $b" + (f.bedtimeForMin?.let { " for ${Format.hm(it.toLong())}" } ?: "") + "." }
+        val ev = e?.let { "Tomorrow: ${it.title} at ${it.startClock}." } ?: "Nothing planned tomorrow."
+        return if (bed != null && ev.length + 1 + bed.length <= BULLET_MAX) "$ev $bed" else ev
+    }
+
+    /** Load so far today against the usual for this hour, as a chip (colour only against his own normal). */
+    fun chipLoadSoFar(soFar: Double, typicalByNow: Double?, partial: Boolean): Chip {
+        if (partial) return CHIP_PARTIAL
+        if (typicalByNow == null) return Chip("Building your usual", Tone.Neutral, "Building")
+        if (typicalByNow < 1.0 && soFar < 1.0) return Chip("Quiet so far", Tone.Neutral, "Quiet")
+        val r = soFar / maxOf(typicalByNow, 1.0)
+        return when {
+            r < 0.75 -> Chip("Lighter than usual", Tone.Neutral, "Lighter")
+            r <= 1.25 -> Chip("About usual", Tone.Good, "Usual")
+            else -> Chip("Heavier than usual", Tone.Caution, "Heavier")
+        }
     }
 }

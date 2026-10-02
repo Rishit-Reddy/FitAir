@@ -1,6 +1,10 @@
 package com.fitair.app
 
+import com.fitair.app.coach.BriefEvent
+import com.fitair.app.coach.BriefFacts
 import com.fitair.app.coach.DayFacts
+import com.fitair.app.ui.today.Mode
+import com.fitair.app.ui.trends.Band
 import com.fitair.app.data.dao.Pace
 import com.fitair.app.ui.components.Tone
 import com.fitair.app.ui.copy.Copy
@@ -134,5 +138,84 @@ class CopyTest {
         all += Copy.OUT_OF_100; all += Copy.BAND_NOTE; all += Copy.SLEEP_WAITING; all += Copy.SLEEP_NONE
         all += Copy.trendVerdict("Recovery signal", 0, true); all += Copy.trendVerdict("Recovery signal", -1, true); all += Copy.trendVerdict("Resting heart rate", 1, false)
         all.forEach { clean(it) }
+    }
+
+    // ---- 0.9.0: summary bullets and chips ------------------------------------------------------------------------
+
+    private val medical = Regex("diagnos|disease|infection|doctor", RegexOption.IGNORE_CASE)
+
+    private fun briefFixtures(): List<BriefFacts> = listOf(
+        BriefFacts(Mode.Morning), BriefFacts(Mode.Day), BriefFacts(Mode.Evening),
+        BriefFacts(Mode.Morning, readiness = 74, verdictKey = "well", driverKey = "sleep", sleepAsleepMin = 412, sleepNeedMin = 457, sleepDebtMin = 130,
+            nextEvent = BriefEvent("Shift", "15:00", 55)),
+        BriefFacts(Mode.Morning, readiness = 41, verdictKey = "not", driverKey = "hrv", sleepAsleepMin = 300, sleepNeedMin = 300,
+            nextEvent = BriefEvent("A very long meeting title with many words", "08:00", null)),
+        BriefFacts(Mode.Day, loadSoFar = 54, loadTypicalByNow = 50, waterMl = 1250, waterGoalMl = 2500, waterPace = "behind", nextEvent = BriefEvent("Shift", "15:00", 55)),
+        BriefFacts(Mode.Day, loadSoFar = 5, loadTypicalByNow = null, waterMl = 2500, waterGoalMl = 2500, waterPace = "reached"),
+        BriefFacts(Mode.Evening, loadSoFar = 80, loadTypicalByNow = 50, workouts = 1, waterMl = 2100, waterGoalMl = 2500, steps = 8234,
+            tomorrowFirst = BriefEvent("Shift", "08:00", null), bedtime = "23:15", bedtimeForMin = 450),
+        BriefFacts(Mode.Evening, loadSoFar = 20, loadTypicalByNow = 50, bedtime = "23:15", bedtimeForMin = 450),
+    )
+
+    @Test fun briefIsAlwaysThreeShortCleanBullets() {
+        briefFixtures().forEach { f ->
+            val b = Copy.brief(f.mode, f)
+            assertEquals("${f.mode}: $b", 3, b.size)
+            b.forEach {
+                assertTrue("empty bullet in $b", it.isNotBlank())
+                assertTrue("'$it' is ${it.length} chars", it.length <= 90)
+                assertFalse("'$it' has !", it.contains('!'))
+                assertFalse("'$it' is medical", medical.containsMatchIn(it))
+                clean(it)
+            }
+        }
+    }
+
+    @Test fun briefMentionsOnlyFactsItWasGiven() {
+        val b = Copy.brief(Mode.Morning, briefFixtures()[3])
+        assertTrue(b[0], b[0].startsWith("Well recovered at 74"))
+        assertTrue(b[1], b[1].contains("6h 52m") && b[1].contains("45m short"))
+        assertTrue(b[2], b[2].contains("Shift at 15:00"))
+        val e = Copy.brief(Mode.Evening, briefFixtures()[7])
+        assertTrue(e[2], e[2].contains("08:00") && e[2].contains("23:15"))
+    }
+
+    @Test fun chipsUseOwnNormalWithDotAndWords() {
+        assertEquals("Well recovered", Copy.chipReadiness(74)!!.text); assertEquals(Tone.Good, Copy.chipReadiness(74)!!.tone)
+        assertEquals("Partly recovered", Copy.chipReadiness(60)!!.text); assertEquals(Tone.Alert, Copy.chipReadiness(30)!!.tone)
+        assertNull(Copy.chipReadiness(null))
+        assertEquals("Need met", Copy.chipSleep(450.0, 457.0)!!.text)
+        assertEquals("45m short", Copy.chipSleep(412.0, 457.0)!!.text); assertEquals(Tone.Caution, Copy.chipSleep(412.0, 457.0)!!.tone)
+        assertEquals("1h 30m short", Copy.chipSleep(360.0, 450.0)!!.text); assertEquals(Tone.Alert, Copy.chipSleep(360.0, 450.0)!!.tone)
+        assertEquals("Learning your normal · 9/14", Copy.chipResting(53.0, null, 9)!!.text)
+        val b = Band(55.0, 2.0)
+        assertEquals("Usual for you", Copy.chipResting(56.0, b, 20)!!.text)
+        assertEquals("A bit high", Copy.chipResting(58.0, b, 20)!!.text); assertEquals("High for you", Copy.chipResting(60.0, b, 20)!!.text)
+        assertEquals("Low", Copy.chipResting(50.0, b, 20)!!.text); assertEquals(Tone.Good, Copy.chipResting(50.0, b, 20)!!.tone)
+        val h = Band(46.0, 5.0)
+        assertEquals("Usual for you", Copy.chipHrv(46.0, h, 20)!!.text); assertEquals("Lower than usual", Copy.chipHrv(40.0, h, 20)!!.text)
+        assertEquals("Low for you", Copy.chipHrv(30.0, h, 20)!!.text); assertEquals("Strong", Copy.chipHrv(60.0, h, 20)!!.text)
+    }
+
+    @Test fun loadChipEdges() {
+        assertEquals("Lighter week", Copy.chipLoad(0.79)!!.text); assertEquals(Tone.Neutral, Copy.chipLoad(0.79)!!.tone)
+        assertEquals("Normal week", Copy.chipLoad(0.8)!!.text); assertEquals("Normal week", Copy.chipLoad(1.3)!!.text)
+        assertEquals("Harder week", Copy.chipLoad(1.31)!!.text); assertEquals("Harder week", Copy.chipLoad(1.5)!!.text)
+        assertEquals("Much harder", Copy.chipLoad(1.51)!!.text); assertEquals(Tone.Alert, Copy.chipLoad(1.51)!!.tone)
+        assertNull(Copy.chipLoad(null))
+    }
+
+    @Test fun heartZoneNamesAndAccessibleSentence() {
+        val z = floatArrayOf(100f, 120f, 150f, 170f)
+        assertEquals("Resting", Copy.heartZone(84, z)); assertEquals("Light", Copy.heartZone(112, z)); assertEquals("Peak", Copy.heartZone(171, z))
+        assertNull(Copy.heartZone(null, z)); assertNull(Copy.heartZone(80, null))
+        assertEquals("Resting heart rate, 53 beats per minute, usual for you. Opens details.",
+            Copy.cardA11y("Resting heart rate", "53 beats per minute", Copy.chipResting(56.0, Band(55.0, 2.0), 20)))
+        assertEquals("Weight, no data yet. Opens details.", Copy.cardA11y("Weight", null, null))
+    }
+
+    @Test fun chipsAndBulletsNeverUseJargon() {
+        listOf(Copy.chipLearning(3), Copy.CHIP_PARTIAL, Copy.CHIP_NO_DATA, Copy.chipWeight(-3.0, "12 Sep")!!, Copy.chipLoadSoFar(50.0, 40.0, false)).forEach { clean(it.text) }
+        assertEquals("Down 3.0 kg since 12 Sep", Copy.chipWeight(-3.0, "12 Sep")!!.text)
     }
 }

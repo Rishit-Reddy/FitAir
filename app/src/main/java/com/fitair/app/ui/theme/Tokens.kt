@@ -22,7 +22,11 @@ object Spacing {
     val xl = 24.dp
     val xxl = 32.dp
     val xxxl = 48.dp
-    val gutter = 20.dp          // page side padding
+    val gutter = 16.dp          // page side padding (0.9.0: 16)
+    val gap = 12.dp             // between Today blocks and Metrics grid cells
+    val subGap = 8.dp           // between sub-cards inside the big card
+    val heroPad = 12.dp         // big-card padding
+    val tilePad = 14.dp         // sub-card padding
     val section = 24.dp         // gap between Today sections
     val minTouch = 48.dp
 }
@@ -30,6 +34,12 @@ object Spacing {
 object Shapes {
     val card = RoundedCornerShape(12.dp)
     val chip = RoundedCornerShape(8.dp)
+    /** Big Today card. */
+    val hero = RoundedCornerShape(28.dp)
+    /** Sub-cards and Metrics cards. */
+    val tile = RoundedCornerShape(20.dp)
+    /** Status chip: full pill. */
+    val pill = RoundedCornerShape(percent = 50)
     val sheet = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
 }
 
@@ -44,6 +54,22 @@ object Type {
     val label = TextStyle(fontFamily = sans, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp)
     /** Callers upper-case the text. */
     val caption = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 1.sp)
+
+    // 0.9.0 (docs/PLAN_090 section 2): sentence-case titles, tabular figures for numbers.
+    private const val TNUM = "tnum"
+    val metricTitle = TextStyle(fontFamily = sans, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 18.sp)
+    val valueL = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 36.sp, lineHeight = 40.sp, letterSpacing = (-0.5).sp, fontFeatureSettings = TNUM)
+    val unitL = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 20.sp)
+    val valueS = TextStyle(fontFamily = sans, fontWeight = FontWeight.Medium, fontSize = 22.sp, lineHeight = 26.sp, fontFeatureSettings = TNUM)
+    /** [valueS] at font scale 1.3 and above. */
+    val valueSDense = valueS.copy(fontSize = 20.sp, lineHeight = 24.sp)
+    val unitS = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 16.sp)
+    val valueGrid = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 30.sp, lineHeight = 34.sp, fontFeatureSettings = TNUM)
+    val chip = TextStyle(fontFamily = sans, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp)
+    val bullet = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 22.sp)
+    val axis = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 11.sp, lineHeight = 14.sp)
+    val headerDate = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 22.sp, lineHeight = 28.sp)
+    val pageTitle = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 24.sp, lineHeight = 30.sp)
 }
 
 /**
@@ -74,3 +100,42 @@ val LightStage = StageColors(awake = Color(0xFFD2691E), light = Color(0xFF3D8BC9
 val DarkStage = StageColors(awake = Color(0xFFF0A35C), light = Color(0xFF93CCF5), rem = Color(0xFFB79BF5), deep = Color(0xFF6A7CF0))
 
 val LocalStageColors = staticCompositionLocalOf { LightStage }
+
+/**
+ * Chip colours as plain ARGB ints so contrast is unit-testable on the JVM. A status chip tints its container with the
+ * status colour (16 % light, 24 % dark) over its surface; the text stays neutral ink (docs/PLAN_090 section 2).
+ */
+object ChipPalette {
+    const val LIGHT_CONTAINER = 0xFFFFFFFF.toInt()      // big-card / Metrics card surface
+    const val LIGHT_CONTAINER_HIGH = 0xFFF2F3F1.toInt() // sub-card surface
+    const val DARK_CONTAINER = 0xFF18191A.toInt()
+    const val DARK_CONTAINER_HIGH = 0xFF222423.toInt()
+    const val LIGHT_INK = 0xFF161616.toInt()
+    const val DARK_INK = 0xFFEDEDEB.toInt()
+    const val LIGHT_NEUTRAL = 0xFFE2E2DF.toInt()        // outlineVariant
+    const val DARK_NEUTRAL = 0xFF2A2A2A.toInt()
+
+    fun blend(top: Int, bottom: Int, alpha: Float): Int {
+        fun ch(shift: Int): Int {
+            val t = (top shr shift) and 0xFF; val b = (bottom shr shift) and 0xFF
+            return Math.round(t * alpha + b * (1f - alpha)).coerceIn(0, 255)
+        }
+        return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+
+    /** Container of a status chip of colour [status] on [surface]; neutral chips use the outline variant. */
+    fun container(status: Int?, surface: Int, dark: Boolean): Int =
+        if (status == null) (if (dark) DARK_NEUTRAL else LIGHT_NEUTRAL) else blend(status, surface, if (dark) 0.24f else 0.16f)
+
+    fun ink(dark: Boolean) = if (dark) DARK_INK else LIGHT_INK
+
+    private fun lin(c: Int): Double { val v = c / 255.0; return if (v <= 0.03928) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4) }
+    fun luminance(argb: Int): Double =
+        0.2126 * lin((argb shr 16) and 0xFF) + 0.7152 * lin((argb shr 8) and 0xFF) + 0.0722 * lin(argb and 0xFF)
+
+    /** WCAG contrast ratio, 1..21. */
+    fun contrast(a: Int, b: Int): Double {
+        val la = luminance(a); val lb = luminance(b)
+        return (maxOf(la, lb) + 0.05) / (minOf(la, lb) + 0.05)
+    }
+}

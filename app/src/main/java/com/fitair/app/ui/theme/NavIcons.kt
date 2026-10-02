@@ -113,6 +113,26 @@ object NavIcons {
 
     val Add: ImageVector by lazy { icon("add") { line(2.2f) { moveTo(12f, 5f); lineTo(12f, 19f); moveTo(5f, 12f); lineTo(19f, 12f) } } }
 
+    // ---- Metrics: axes with a rising trend line ("monitoring") ---------------------------------------------
+
+    private fun ImageVector.Builder.trend() = line {
+        moveTo(3.5f, 16.5f); lineTo(8.5f, 11f); lineTo(12.5f, 14.5f); lineTo(20.5f, 6.5f)
+    }
+
+    val MetricsOutline: ImageVector by lazy {
+        icon("metrics_outline") {
+            line { moveTo(3.5f, 3.5f); lineTo(3.5f, 20.5f); lineTo(20.5f, 20.5f) }
+            trend()
+        }
+    }
+    val MetricsFilled: ImageVector by lazy {
+        icon("metrics_filled") {
+            solid { moveTo(3.5f, 16.5f); lineTo(8.5f, 11f); lineTo(12.5f, 14.5f); lineTo(20.5f, 6.5f); lineTo(20.5f, 19f); lineTo(3.5f, 19f); close() }
+            line { moveTo(3.5f, 3.5f); lineTo(3.5f, 20.5f); lineTo(20.5f, 20.5f) }
+            trend()
+        }
+    }
+
     // ---- gear (Today header) -----------------------------------------------------------------------------
 
     val Gear: ImageVector by lazy {

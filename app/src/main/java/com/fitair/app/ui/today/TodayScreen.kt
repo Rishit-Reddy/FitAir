@@ -14,7 +14,18 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.dp
+import com.fitair.app.data.metrics.MetricId
+import com.fitair.app.ui.metrics.MetricCards
+import com.fitair.app.ui.theme.Type as T
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -53,12 +64,23 @@ import java.util.Locale
 
 private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())
 
-/** Screens opened from Today (and the gear). Agenda now means "switch to the Calendar tab". */
-enum class TodayDest { Agenda, Sleep, Readiness, Hrv, RestingHr, Load, Settings }
+/** Screens opened from Today, the gear and the Metrics tab. Agenda means "switch to the Calendar tab". */
+enum class TodayDest { Agenda, Sleep, Readiness, Hrv, RestingHr, Load, Settings, Heart, Steps, Energy, Distance, Water }
+
+/** The detail screen a metric card opens; null where there is none yet (Weight arrives in 0.9.1). Bedtime opens Sleep. */
+fun destFor(id: MetricId): TodayDest? = when (id) {
+    MetricId.Heart -> TodayDest.Heart; MetricId.Readiness -> TodayDest.Readiness; MetricId.Sleep, MetricId.Bedtime -> TodayDest.Sleep
+    MetricId.RestingHr -> TodayDest.RestingHr; MetricId.Hrv -> TodayDest.Hrv; MetricId.Load -> TodayDest.Load
+    MetricId.Energy -> TodayDest.Energy; MetricId.Distance -> TodayDest.Distance; MetricId.Steps -> TodayDest.Steps
+    MetricId.Water -> TodayDest.Water; MetricId.Weight -> null
+}
+
+private val WIDE = 600.dp
 
 /**
- * Today: header (date, "data to 14:05", gear), then [todayBlocks] for the current [Mode]. The mode is recomputed on open,
- * on pull-to-refresh and after a sync-on-open that finishes within 30 s, never while the screen is being touched.
+ * Today: header (date, "data to 14:05", gear), one big card with two large and three small metric cards chosen by [todayLayout]
+ * and exactly three summary bullets, then the slim Next up and Water strips. The mode is recomputed on open, on pull-to-refresh and
+ * after a sync-on-open that finishes within 30 s, never while the screen is being touched.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +90,7 @@ fun TodayScreen(
     val ui = vm.ui
     val mode = vm.mode
     var sheet by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
     var syncInfo by remember { mutableStateOf(false) }
     val agenda: AgendaVm = viewModel()
     val requestCalendar = rememberCalendarPermissionRequest { agenda.refresh() }
@@ -76,10 +99,7 @@ fun TodayScreen(
     // tick once a minute so "in 40 min" and the freshness text stay true
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); now = System.currentTimeMillis() } }
-    // collapsed blocks expand inline; reset when the mode changes
-    var readinessOpen by rememberSaveable(mode) { mutableStateOf(false) }
-    var sleepOpen by rememberSaveable(mode) { mutableStateOf(false) }
-    LaunchedEffect(mode, ui?.date, ui?.facts != null) { if (mode == Mode.Evening) vm.ensureSummary() }
+    LaunchedEffect(mode, ui?.date, ui?.lastSyncMs, ui?.dataToMs) { vm.ensureBrief() }
     val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) vm.enableWaterReminders() }
 
     if (syncInfo) {
@@ -119,7 +139,7 @@ fun TodayScreen(
         Page(scrollState = scroll) {
             val fresh = Format.freshness(now, ui?.lastSyncMs ?: 0L)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(ui?.date?.format(DATE_FMT) ?: "", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(ui?.date?.format(DATE_FMT) ?: "", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 1)
                 val dataTo = ui?.dataToMs?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
                 val checked = ui?.lastSyncMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
                 val newestAgeMin = ui?.dataToMs?.let { (now - it) / 60_000L }
@@ -135,79 +155,158 @@ fun TodayScreen(
                 ) { Icon(NavIcons.Gear, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             vm.syncNote?.let { Text(it, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = Spacing.xs)) }
-            Spacer(Modifier.height(Spacing.l))
+            Spacer(Modifier.height(Spacing.m))
             vm.error?.let { InlineError(it, onRetry = { vm.load(setMode = true) }) }
             if (ui == null || mode == null) return@Page
             if (!ui.hasData) {
                 EmptyState("No data yet", "Pull down to sync from Health Connect.")
                 return@Page
             }
-            val agendaLeft = AgendaFormat.nextUp(agenda.todayItems, Instant.ofEpochMilli(now)) != null
-            val expanded = buildSet {
-                if (readinessOpen) add(TodayBlock.ReadinessCompact)
-                if (sleepOpen) add(TodayBlock.SleepLine)
+            val nowLocal = remember(now) { LocalDateTime.now() }
+            val waterOpen = remember(now, ui.wake, mode) {
+                val nowMin = nowLocal.hour * 60 + nowLocal.minute
+                val bed = (ui.wake?.usualBedMin ?: 23 * 60).let { if (it < 12 * 60) it + 24 * 60 else it }
+                !(mode == Mode.Evening && (nowMin >= bed - 60 || nowMin < 4 * 60))
             }
-            val blocks = todayBlocks(ui, mode, expanded, agendaLeft)
-            blocks.forEachIndexed { i, b ->
-                if (i > 0) { if (blocks[i - 1].card && b.card) Spacer(Modifier.height(Spacing.m)) else SectionBreak() }
-                when (b) {
-                    TodayBlock.Readiness -> {
-                        val r = ui.readiness
-                        ReadinessHero(
-                            r?.score, Copy.readiness(r?.score),
-                            driver = r?.mainDriverPlain ?: r?.note,
-                            onClick = { if (r != null) sheet = true else onOpen(TodayDest.Readiness) },
-                        )
+            val layout = todayLayout(mode, waterOpen = waterOpen && ui.water != null, alert = ui.insights.any { it.alert })
+            val hero: @Composable () -> Unit = {
+                HeroCard(ui, mode, layout, vm.brief, now,
+                    onCard = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) },
+                    onDetails = { details = true })
+            }
+            val strips: @Composable () -> Unit = {
+                layout.below.forEach { b ->
+                    when (b) {
+                        Below.NextUp -> NextUpStripBlock(agenda, mode, now, onOpenCalendar, requestCalendar)
+                        Below.Water -> WaterBlock(ui, mode, vm, onEnableReminders = {
+                            if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
+                        })
+                        Below.Alert -> ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) }
                     }
-                    TodayBlock.ReadinessCompact -> ReadinessCompact(
-                        ui.readiness?.score, Copy.readiness(ui.readiness?.score), heartLine(ui), onClick = { readinessOpen = true })
-                    TodayBlock.Sleep -> {
-                        val n = ui.night!!
-                        SleepCard(Format.duration(n.durationMin), n.window, n.score, n.needDiffMin, n.debt, n.stages, onClick = { onOpen(TodayDest.Sleep) })
+                }
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth >= WIDE) {
+                    // unfolded: big card left (max 560 dp), Next up + today's agenda + Water on the right
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+                        Column(Modifier.weight(1f).widthIn(max = 560.dp)) { hero() }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+                            strips()
+                            AgendaBlock(agenda, rest = true, onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
+                        }
                     }
-                    TodayBlock.SleepLine -> SleepLineBlock(ui, mode, onExpand = { sleepOpen = true }, onOpen = onOpen)
-                    TodayBlock.Vitals -> VitalsBlock(ui.vitals, onOpen)
-                    TodayBlock.NextUp -> if (!agenda.hasPerm) CalendarPrompt(onRequestCalendar = requestCalendar)
-                        else if (agenda.loaded) NextUpBlock(agenda.todayItems, agenda.tomorrow, agenda.colors, ZoneId.systemDefault(), onClick = onOpenCalendar)
-                    TodayBlock.Agenda, TodayBlock.AgendaRest -> AgendaBlock(agenda, rest = b == TodayBlock.AgendaRest,
-                        onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
-                    TodayBlock.Load -> ui.load?.let {
-                        LoadCard(Copy.loadSoFar(it.soFar, it.typicalByNow, it.partial), onClick = { onOpen(TodayDest.Load) })
-                    }
-                    TodayBlock.Water -> WaterBlock(ui, mode, vm, onEnableReminders = {
-                        if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
-                    })
-                    TodayBlock.DaySummary -> DaySummaryCard(
-                        ui.facts, vm.summary, vm.summaryLoading, onOpen = { onOpen(TodayDest.Load) }, onRegenerate = { vm.ensureSummary(regenerate = true) })
-                    TodayBlock.Tomorrow -> TomorrowBlock(agenda, onOpen = onOpenCalendar, onRequest = requestCalendar)
-                    TodayBlock.WindDown -> ui.windDown?.let { QuietLine("Wind down", Copy.windDown(it.needMin, it.bedMin, it.short)) }
-                    TodayBlock.Insights -> InsightsBlock(if (mode == Mode.Evening) ui.insights.filter { it.id in EVENING_INSIGHTS } else ui.insights)
+                } else {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); strips() }
                 }
             }
         }
     }
     val r = ui?.readiness
     if (sheet && r != null) BreakdownSheet(r, onDismiss = { sheet = false }, onTrend = { sheet = false; onOpen(TodayDest.Readiness) })
-}
-
-private fun heartLine(ui: TodayUi): String? {
-    val parts = listOfNotNull(ui.hrNow?.let { "heart rate now $it" }, ui.restingHr?.let { "resting $it" })
-    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+    if (details) DetailsSheet(ui?.facts, onDismiss = { details = false })
 }
 
 @Composable
-private fun SleepLineBlock(ui: TodayUi, mode: Mode, onExpand: () -> Unit, onOpen: (TodayDest) -> Unit) {
-    val n = ui.night
-    if (n != null) {
-        SleepLine(Copy.sleepLine(n.durationMin, n.score), onClick = if (mode == Mode.Morning) ({ onOpen(TodayDest.Sleep) }) else onExpand)
+private fun HeroCard(
+    ui: TodayUi, mode: Mode, layout: TodayLayout, brief: com.fitair.app.coach.Brief?, nowMs: Long,
+    onCard: (MetricId) -> Unit, onDetails: () -> Unit,
+) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val border = if (dark) Modifier else Modifier.border(1.dp, androidx.compose.ui.graphics.Color(0xFFE7E7E4), Shapes.hero)
+    val snap = ui.snapshot
+    Column(
+        Modifier.fillMaxWidth().then(border).clip(Shapes.hero).background(MaterialTheme.colorScheme.surfaceContainer).padding(Spacing.heroPad),
+        verticalArrangement = Arrangement.spacedBy(Spacing.subGap),
+    ) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.subGap)) {
+            layout.large.forEach { id ->
+                val m = Modifier.weight(1f).fillMaxHeight()
+                if (snap == null) MetricCardSkeleton(CardSize.Large, m)
+                else MetricCard(MetricCards.card(id, snap, CardSize.Large, mode, nowMs), CardSize.Large, { onCard(id) }, m)
+            }
+        }
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.subGap)) {
+            layout.small.forEach { id ->
+                val m = Modifier.weight(1f).fillMaxHeight()
+                if (snap == null) MetricCardSkeleton(CardSize.Small, m)
+                else MetricCard(MetricCards.card(id, snap, CardSize.Small, mode, nowMs), CardSize.Small, { onCard(id) }, m)
+            }
+        }
+        SummarySection(brief, onDetails)
+    }
+}
+
+/** "Summary" with "Details ›", then exactly three bullets (placeholders of the same height while nothing is there yet). */
+@Composable
+private fun SummarySection(brief: com.fitair.app.coach.Brief?, onDetails: () -> Unit) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.s)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Summary", style = Type.metricTitle, color = dim)
+            if (brief?.source == "template") Text("  rules", style = Type.caption, color = dim)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onDetails, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Details ›", style = Type.label) }
+        }
+        val bullets = brief?.bullets?.takeIf { it.size == 3 }
+        repeat(3) { i ->
+            Row(Modifier.fillMaxWidth().padding(bottom = if (i < 2) Spacing.s else Spacing.xs), verticalAlignment = Alignment.Top) {
+                Box(Modifier.padding(top = 8.dp, end = 10.dp).size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant))
+                if (bullets != null) Text(bullets[i], style = Type.bullet, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                else Box(Modifier.weight(1f).padding(vertical = 4.dp).height(14.dp).clip(Shapes.pill).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)))
+            }
+        }
+    }
+}
+
+/** Today's fact grid in a bottom sheet (steps, distance, cardio load, water, heart rate, workouts). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DetailsSheet(facts: com.fitair.app.coach.DayFacts?, onDismiss: () -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        shape = Shapes.sheet, containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
+    ) {
+        Column(Modifier.padding(start = Spacing.gutter, end = Spacing.gutter, bottom = Spacing.xxl)) {
+            Text("Today so far", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(Spacing.s))
+            DayFactsGrid(facts)
+        }
+    }
+}
+
+/** Next up (Morning, Day) or "Tomorrow 08:00 Shift" (Evening) as a slim strip; a calendar prompt without permission. */
+@Composable
+private fun NextUpStripBlock(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
+    if (!agenda.hasPerm) {
+        Row(
+            Modifier.fillMaxWidth().clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer).heightIn(min = 64.dp).padding(start = Spacing.l, end = Spacing.s),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("See today's events here", style = Type.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRequest, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Show my calendar", style = Type.label) }
+        }
         return
     }
-    val synced = ui.lastSyncMs.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
-    val waiting = ui.wake?.waiting == true
-    SleepLine(
-        if (waiting) Copy.SLEEP_WAITING + (synced?.let { " · synced ${Format.clock(it.hour, it.minute)}" } ?: "") else Copy.SLEEP_NONE,
-        onClick = null,
-    )
+    if (!agenda.loaded) return
+    val z = remember { ZoneId.systemDefault() }
+    val n = if (mode == Mode.Evening) null else AgendaFormat.nextUp(agenda.todayItems, Instant.ofEpochMilli(nowMs))
+    if (n != null) {
+        NextUpStrip("Next up", n.e.title.ifBlank { "Busy" }, AgendaFormat.nextUpLine(n, z),
+            agenda.colors[n.e.calId]?.let { Color(it) }, n.running, onOpenCalendar)
+    } else {
+        val tomorrow = AgendaFormat.tomorrowLine(agenda.tomorrow, z)
+        NextUpStrip(if (mode == Mode.Evening) "Next up" else "Free for the rest of the day", tomorrow ?: "Nothing scheduled tomorrow", null, null, false, onOpenCalendar)
+    }
+}
+
+/** One quiet line for an alert-level insight (everything milder lives in the summary bullets). */
+@Composable
+private fun AlertLine(i: Insight) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
+        StatusDot(toneColor(Tone.Alert))
+        Spacer(Modifier.width(Spacing.m))
+        Text("Worth a look: ${i.title}", style = Type.body)
+    }
 }
 
 /** Quiet prompt while the calendar permission is missing. */
@@ -234,66 +333,13 @@ private fun AgendaBlock(vm: AgendaVm, rest: Boolean, onOpen: () -> Unit, onReque
     if (c.hidden) TextButton(onClick = onOpen) { Text("Show all (${c.eventCount})", style = Type.label) }
 }
 
-/** Tomorrow's events (up to 4) and the first start, or "Nothing scheduled tomorrow". */
-@Composable
-private fun TomorrowBlock(vm: AgendaVm, onOpen: () -> Unit, onRequest: () -> Unit) {
-    val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    val z = remember { ZoneId.systemDefault() }
-    Box(Modifier.heightIn(min = Spacing.minTouch).clickable(role = Role.Button, onClick = onOpen), contentAlignment = Alignment.CenterStart) {
-        SectionHeader("Tomorrow ›")
-    }
-    if (!vm.hasPerm) { CalendarPrompt(onRequest); return }
-    if (!vm.loaded) return
-    val ev: List<CalEvent> = vm.tomorrow.sortedWith(compareBy({ !it.allDay }, { it.begin }))
-    if (ev.isEmpty()) { Text("Nothing scheduled tomorrow", style = Type.body, color = dim); return }
-    AgendaFormat.firstEventLine(ev, z)?.let { Text(it, style = Type.body) }
-    Spacer(Modifier.height(Spacing.xs))
-    ev.take(4).forEach {
-        com.fitair.app.ui.components.AgendaRow(AgendaFormat.eventTime(it, z), it.title.ifBlank { "Busy" }, busy = it.busy,
-            dot = vm.colors[it.calId]?.let { c -> Color(c) })
-    }
-    if (ev.size > 4) TextButton(onClick = onOpen) { Text("Show all (${ev.size})", style = Type.label) }
-}
-
-/** Water until the window ends (bedtime minus an hour), then one line with the day's total. */
+/** The Water strip (the layout drops it once the window has ended). */
 @Composable
 private fun WaterBlock(ui: TodayUi, mode: Mode, vm: TodayVm, onEnableReminders: () -> Unit) {
     val w = ui.water ?: return
-    val now = LocalDateTime.now()
-    val nowMin = now.hour * 60 + now.minute
-    val bed = (ui.wake?.usualBedMin ?: 23 * 60).let { if (it < 12 * 60) it + 24 * 60 else it }
-    if (mode == Mode.Evening && (nowMin >= bed - 60 || nowMin < 4 * 60)) {
-        QuietLine("Water", "Today ${Copy.litres(w.ml)} L")
-        return
-    }
     WaterCard(
         w.ml, w.goalMl, w.extraMl, w.pace, ui.glassMl, vm.logged?.ml,
         onAdd = vm::addWater, onUndo = vm::undoWater, remindersOn = w.remindersOn, onEnableReminders = onEnableReminders,
     )
 }
 
-/** One row of two compact tiles with equal heights. */
-@Composable
-private fun VitalsBlock(vitals: List<Vital>, onOpen: (TodayDest) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
-        vitals.forEach { v ->
-            val m = Modifier.weight(1f).fillMaxHeight().let { b ->
-                if (v.dest == null) b else b.clip(Shapes.card).clickable(role = Role.Button) { onOpen(v.dest!!) }
-            }
-            VitalTile(if (v.dest != null) v.label + " ›" else v.label, v.verdict, m)
-        }
-    }
-}
-
-@Composable
-private fun InsightsBlock(insights: List<Insight>) {
-    SectionHeader("Worth a look")
-    Spacer(Modifier.height(Spacing.s))
-    insights.forEach { i ->
-        Row(Modifier.fillMaxWidth().padding(vertical = Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(toneColor(if (i.alert) Tone.Alert else Tone.Caution))
-            Spacer(Modifier.width(Spacing.m))
-            Text(i.title, style = Type.body)
-        }
-    }
-}
