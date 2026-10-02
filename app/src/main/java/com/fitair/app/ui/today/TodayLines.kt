@@ -30,12 +30,21 @@ object TodayLines {
     }
 
     /** One sentence for the top of Today from the Readiness card (day) or the Bedtime card (evening). */
-    fun verdict(evening: Boolean, readiness: CardData?, bedtime: CardData?): String? =
+    fun verdict(evening: Boolean, readiness: CardData?, bedtime: CardData?, now: java.time.LocalDateTime? = null): String? =
         if (evening) bedtime?.takeIf { it.value != null }?.let { b ->
-            listOfNotNull("Bed by ${b.value}", b.sub, b.chip?.text).joinToString(" · ")
+            val lead = if (pastBedtime(b.value!!, now)) "Past bedtime (${b.value})" else "Bed by ${b.value}"
+            listOfNotNull(lead, b.sub, b.chip?.text).joinToString(" · ")
         } else readiness?.takeIf { it.value != null }?.let { r ->
             listOfNotNull("Readiness ${r.value}", r.chip?.text).joinToString(" · ")
         }
+}
+
+/** True once the clock has passed [bed] ("01:03") on the current night: after it until noon, or from it onward for an evening bedtime. */
+fun pastBedtime(bed: String, now: java.time.LocalDateTime?): Boolean {
+    if (now == null) return false
+    val m = bed.split(":").takeIf { it.size == 2 }?.let { (h, mm) -> (h.toIntOrNull() ?: return false) * 60 + (mm.toIntOrNull() ?: return false) } ?: return false
+    val n = now.hour * 60 + now.minute
+    return if (m < 12 * 60) n in m until 12 * 60 else n >= m
 }
 
 /** Pure geometry of the 00-24 day strip: minutes of the day clamped to 0..1440. */

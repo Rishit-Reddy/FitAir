@@ -175,7 +175,7 @@ fun TodayScreen(
             val openCard: (MetricId) -> Unit = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) }
             val verdict = remember(ui.snapshot, evening, now / 60_000L) {
                 ui.snapshot?.let { s ->
-                    TodayLines.verdict(evening, MetricCards.card(MetricId.Readiness, s, mode = cardMode), MetricCards.card(MetricId.Bedtime, s, mode = cardMode))
+                    TodayLines.verdict(evening, MetricCards.card(MetricId.Readiness, s, mode = cardMode), MetricCards.card(MetricId.Bedtime, s, mode = cardMode), LocalDateTime.now())
                 }
             }
             val recapCard: @Composable () -> Unit = {
@@ -199,9 +199,9 @@ fun TodayScreen(
                         Column(Modifier.weight(1f).widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
                             if (recap) { recapCard(); water() } else {
                                 verdict?.let { Text(it, style = Type.body, maxLines = 2) }
-                                HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(min = 140.dp, max = 200.dp))
+                                HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(max = 170.dp))
                                 water()
-                                vitals(Modifier.weight(1f).heightIn(min = 104.dp, max = 170.dp))
+                                vitals(Modifier.height(108.dp))
                             }
                             alert()
                         }
@@ -211,9 +211,9 @@ fun TodayScreen(
                     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
                         if (recap) { recapCard(); water() } else {
                             verdict?.let { Text(it, style = Type.body, maxLines = 2) }
-                            HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(min = 140.dp, max = 200.dp))
+                            HeartHero(ui.snapshot, cardMode, now, { openCard(MetricId.Heart) }, Modifier.heightIn(max = 170.dp))
                             water()
-                            vitals(Modifier.weight(1f).heightIn(min = 104.dp, max = 170.dp))
+                            vitals(Modifier.height(108.dp))
                         }
                         snippets(); alert()
                     }

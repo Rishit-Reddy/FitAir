@@ -39,3 +39,11 @@ class TodayLinesTest {
         assertEquals(0.5f, StripMath.frac(12 * 3_600_000L, 0)); assertEquals(1f, StripMath.frac(99 * 3_600_000L, 0))
     }
 }
+
+class PastBedtimeTest {
+    private fun at(h: Int, m: Int) = java.time.LocalDateTime.of(2026, 10, 3, h, m)
+    @Test fun afterAMidnightBedtimeIsPast() = assertEquals(true, pastBedtime("01:03", at(1, 23)))
+    @Test fun beforeAMidnightBedtimeIsNotPast() = assertEquals(false, pastBedtime("01:03", at(0, 40)))
+    @Test fun morningClearsIt() = assertEquals(false, pastBedtime("01:03", at(12, 0)))
+    @Test fun eveningBedtimeIsPastAfterItsClock() { assertEquals(true, pastBedtime("22:30", at(23, 0))); assertEquals(false, pastBedtime("22:30", at(21, 0))) }
+}
