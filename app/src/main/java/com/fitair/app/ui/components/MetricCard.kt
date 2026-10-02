@@ -84,9 +84,9 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     val stale = data.state == CardState.Stale
     val empty = data.state == CardState.Empty
-    val minH = when (size) { CardSize.Large -> if (compact) 128.dp else 172.dp; CardSize.Small -> if (compact) 84.dp else 112.dp; CardSize.Grid -> 188.dp }
-    val vPad = if (compact) 10.dp else Spacing.tilePad
-    val chartH = if (compact) 36.dp else 56.dp
+    val minH = when (size) { CardSize.Large -> if (compact) 104.dp else 172.dp; CardSize.Small -> if (compact) 60.dp else 112.dp; CardSize.Grid -> 188.dp }
+    val vPad = if (compact) 8.dp else Spacing.tilePad
+    val chartH = if (compact) 26.dp else 56.dp
     val border = if (raised && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
     val accent = if (stale || empty) null else MetricAccent.of(data.id, dark)
     androidx.compose.runtime.CompositionLocalProvider(com.fitair.app.ui.components.charts.LocalChartAccent provides accent) {
@@ -103,6 +103,17 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
                 val dense = LocalDensity.current.fontScale >= 1.3f || ((data.value?.length ?: 0) + (data.unit?.length ?: 0)) > 8
                 Text(data.title, style = Type.metricTitle.copy(fontSize = 13.sp), color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
+                if (compact) {
+                    // value on the left, the chip (or the small sub line) on the same row
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f, fill = false)) { ValueText(data.value, data.unit, if (dense) Type.valueSDense else Type.valueS, Type.unitS, stale) }
+                        Spacer(Modifier.weight(1f).widthIn(min = 6.dp))
+                        when {
+                            chip != null -> StatusChip(chip, surface, short = true)
+                            data.sub != null -> Text(data.sub, style = Type.unitS, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                } else {
                 ValueText(data.value, data.unit, if (dense) Type.valueSDense else Type.valueS, Type.unitS, stale)
                 Spacer(Modifier.weight(1f, fill = true).heightIn(min = 6.dp))
                 when {
@@ -110,6 +121,7 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
                     data.smallShowsMini && data.mini != null -> MiniChart(data.mini, 24.dp)
                     chip != null -> StatusChip(chip, surface, short = true)
                     data.sub != null -> Text(data.sub, style = Type.unitS, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 }
             }
             CardSize.Large -> {

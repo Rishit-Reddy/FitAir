@@ -197,7 +197,7 @@ fun TodayScreen(
                 }
             }
             val panel: @Composable (Modifier) -> Unit = { m ->
-                TodayCalendarPanel(agenda, mode == Mode.Evening, now, onOpenCalendar, requestCalendar, m)
+                TodayCalendarPanel(agenda, now, onOpenCalendar, requestCalendar, m)
             }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 if (maxWidth >= WIDE) {

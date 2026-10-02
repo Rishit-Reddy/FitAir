@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.fitair.app.integrations.calendar.CalEvent
+import com.fitair.app.ui.theme.LocalStatusColors
 import com.fitair.app.ui.theme.Type
 import java.time.Duration
 import java.time.Instant
@@ -77,7 +78,9 @@ fun DayTimeline(events: List<CalEvent>, day: LocalDate, colors: AgendaColors, no
             }
             if (nowMs != null) {
                 val y = HOUR_H * (minutes(dayStart, Instant.ofEpochMilli(nowMs)).coerceIn(0f, 1440f) / 60f)
-                Box(Modifier.offset(x = LABEL_W - 4.dp, y = y - 1.dp).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.primary))
+                val red = LocalStatusColors.current.alert
+                Box(Modifier.offset(x = LABEL_W, y = y - 1.dp).fillMaxWidth().height(2.dp).background(red))
+                Box(Modifier.offset(x = LABEL_W - 4.dp, y = y - 4.dp).size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(red))
             }
         }
     }
