@@ -309,20 +309,12 @@ fun SettingsScreen(vm: MainViewModel) {
         Spacer(Modifier.height(24.dp))
         Hairline()
         Spacer(Modifier.height(24.dp))
-        Caption("Laptop sync")
+        Caption("Data")
         Spacer(Modifier.height(8.dp))
-        PrefField(vm, SyncPrefs.ADDR, "Laptop server address (http://100.x.y.z:8787)", secret = false)
-        PrefField(vm, SyncPrefs.KEY, "Server API key", secret = true)
-        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { vm.testConnection() }, enabled = !vm.testing) {
-                Text(if (vm.testing) "Testing…" else "Test connection")
-            }
-            TextButton(onClick = { vm.syncNow() }, enabled = !vm.syncing) {
-                Text(if (vm.syncing) "Syncing…" else "Sync now")
-            }
+        TextButton(onClick = { vm.syncNow() }, enabled = !vm.syncing) {
+            Text(if (vm.syncing) "Syncing…" else "Sync now")
         }
         val dim = MaterialTheme.colorScheme.onSurfaceVariant
-        vm.testResult?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = dim) }
         val last = if (vm.syncLastMs > 0)
             java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
                 .format(java.util.Date(vm.syncLastMs)) else "never"
@@ -335,6 +327,7 @@ fun SettingsScreen(vm: MainViewModel) {
             }.getOrNull()
             if (txt != null) Text(txt, style = MaterialTheme.typography.bodySmall, color = dim)
         }
+        if (vm.dbSizeBytes > 0) Text("Database: %.1f MB".format(vm.dbSizeBytes / 1048576.0), style = MaterialTheme.typography.bodySmall, color = dim)
         Spacer(Modifier.height(24.dp))
         Hairline()
         Spacer(Modifier.height(24.dp))

@@ -18,22 +18,12 @@ import java.util.Locale
 data class ChatMsg(val role: String /* "user" | "assistant" | "note" */, val text: String)
 
 object ServerApi {
-    /** GET [path] (including query string) on the laptop server. @throws IOException with readable message. */
+    /** GET [path] (including query string), computed on-device from the local database. @throws IOException with readable message. */
     suspend fun get(ctx: Context, path: String): JSONObject = withContext(Dispatchers.IO) {
-        val prefs = ctx.getSharedPreferences(SyncPrefs.FILE, Context.MODE_PRIVATE)
-        val base = SyncRepo.baseUrl(prefs.getString(SyncPrefs.ADDR, "") ?: "")
-        val key = prefs.getString(SyncPrefs.KEY, "") ?: ""
-        if (base.isEmpty()) throw IOException("No server address configured")
-        val p = if (path.startsWith("/")) path else "/$path"
-        val text = try {
-            SyncRepo.request("GET", base + p, key, null)
-        } catch (e: IOException) {
-            throw IOException("Server request failed (${p.substringBefore('?')}): ${e.message ?: e.javaClass.simpleName}", e)
-        }
         try {
-            JSONObject(text)
-        } catch (e: Exception) {
-            throw IOException("Server returned invalid JSON for ${p.substringBefore('?')}")
+            LocalApi.get(ctx, path)
+        } catch (e: IllegalArgumentException) {
+            throw IOException("Bad request (${path.substringBefore('?')}): ${e.message}", e)
         }
     }
 }
@@ -129,7 +119,7 @@ class CoachRepo(private val ctx: Context) {
                 "Today's readiness (/readiness):\n${if (ready != null) trunc(ready.toString()) else "unavailable"}"
         } catch (e: IOException) {
             AppLog.d("coach: context prefetch failed: ${e.message}")
-            ctxText = "DATA UNAVAILABLE: the laptop server could not be reached (${e.message}). " +
+            ctxText = "DATA UNAVAILABLE: the phone's own database could not be read (${e.message}). " +
                 "Tell the user their data is currently unavailable; do not guess numbers. Tools will probably fail too."
         }
         return """

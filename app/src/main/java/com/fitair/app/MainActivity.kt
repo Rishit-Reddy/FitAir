@@ -50,8 +50,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var syncLastMs by mutableStateOf(prefs.getLong(SyncPrefs.LAST, 0L)); private set
     var syncCounts by mutableStateOf(prefs.getString(SyncPrefs.COUNTS, null)); private set
     var syncStatus by mutableStateOf(prefs.getString(SyncPrefs.STATUS, null)); private set
-    var testResult by mutableStateOf<String?>(null); private set
-    var testing by mutableStateOf(false); private set
+    var dbSizeBytes by mutableStateOf(0L); private set
 
     // ---- coach chat ----
     private val coachRepo = CoachRepo(app)
@@ -131,21 +130,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 syncing = infos.any { !it.state.isFinished }
                 syncLastMs = prefs.getLong(SyncPrefs.LAST, 0L)
                 syncCounts = prefs.getString(SyncPrefs.COUNTS, null)
+                dbSizeBytes = withContext(Dispatchers.IO) { runCatching { LocalStore.get(app).sizeBytes() }.getOrDefault(0L) }
                 syncStatus = prefs.getString(SyncPrefs.STATUS, null)
             }
         }
     }
 
     fun syncNow() { AppLog.d("Sync now tapped"); SyncScheduler.syncNow(getApplication()) }
-
-    fun testConnection() {
-        viewModelScope.launch {
-            testing = true; testResult = null
-            testResult = SyncRepo.testConnection(getPref(SyncPrefs.ADDR), getPref(SyncPrefs.KEY))
-            AppLog.d("Test connection: $testResult")
-            testing = false
-        }
-    }
 
     fun setTheme(m: ThemeMode) { themeMode = m; prefs.edit().putString("theme", m.key).apply() }
     fun getPref(k: String): String = prefs.getString(k, "") ?: ""
