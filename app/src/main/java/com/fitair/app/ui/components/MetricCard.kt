@@ -77,14 +77,16 @@ private fun ValueText(value: String?, unit: String?, valueStyle: androidx.compos
  * The whole card is one click target with a full-sentence description; charts are silent.
  */
 @Composable
-fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier, onPage: Boolean = false) {
+fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Modifier = Modifier, onPage: Boolean = false, compact: Boolean = false) {
     val dark = isDarkTheme()
     val raised = size == CardSize.Grid || onPage
     val surface = if (raised) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     val stale = data.state == CardState.Stale
     val empty = data.state == CardState.Empty
-    val minH = when (size) { CardSize.Large -> 172.dp; CardSize.Small -> 112.dp; CardSize.Grid -> 188.dp }
+    val minH = when (size) { CardSize.Large -> if (compact) 128.dp else 172.dp; CardSize.Small -> if (compact) 84.dp else 112.dp; CardSize.Grid -> 188.dp }
+    val vPad = if (compact) 10.dp else Spacing.tilePad
+    val chartH = if (compact) 36.dp else 56.dp
     val border = if (raised && !dark) Modifier.border(1.dp, Color(0xFFE7E7E4), Shapes.tile) else Modifier
     val accent = if (stale || empty) null else MetricAccent.of(data.id, dark)
     androidx.compose.runtime.CompositionLocalProvider(com.fitair.app.ui.components.charts.LocalChartAccent provides accent) {
@@ -93,7 +95,7 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
             .clickable(role = Role.Button, onClick = onClick)
             .clearAndSetSemantics { contentDescription = data.a11y; role = Role.Button }
             .heightIn(min = maxOf(minH, Spacing.minTouch))
-            .padding(horizontal = if (size == CardSize.Small) 12.dp else Spacing.tilePad, vertical = Spacing.tilePad),
+            .padding(horizontal = if (size == CardSize.Small) 12.dp else Spacing.tilePad, vertical = vPad),
     ) {
         val chip = if (empty) Chip("No data", Tone.Neutral) else data.chip
         when (size) {
@@ -115,7 +117,7 @@ fun MetricCard(data: CardData, size: CardSize, onClick: () -> Unit, modifier: Mo
                 ValueText(data.value, data.unit, Type.valueL, Type.unitL, stale)
                 if (data.sub != null) Text(data.sub, style = Type.unitS, color = dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f, fill = true).heightIn(min = 6.dp))
-                if (empty || data.mini == null) EmptyBaseline(56.dp) else MiniChart(data.mini, 56.dp)
+                if (empty || data.mini == null) EmptyBaseline(chartH) else MiniChart(data.mini, chartH)
                 if (data.mini is Mini.HrDay || data.mini is Mini.LoadCurve) DayAxisLabels()
                 if (chip != null) { Spacer(Modifier.height(Spacing.s)); StatusChip(chip, surface) }
             }

@@ -61,8 +61,8 @@ class TodayLayout(val large: List<MetricId>, val small: List<MetricId>, val belo
 fun todayLayout(mode: Mode, waterOpen: Boolean = true, alert: Boolean = false): TodayLayout {
     val (large, small) = when (mode) {
         Mode.Morning -> listOf(MetricId.Readiness, MetricId.Sleep) to listOf(MetricId.Hrv, MetricId.RestingHr, MetricId.Load)
-        Mode.Day -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Readiness, MetricId.Sleep, MetricId.Energy)
-        Mode.Evening -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Energy, MetricId.Steps, MetricId.Bedtime)
+        Mode.Day -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Readiness, MetricId.Sleep)
+        Mode.Evening -> listOf(MetricId.Load, MetricId.Heart) to listOf(MetricId.Steps, MetricId.Bedtime)
     }
     return TodayLayout(large, small, buildList {
         add(Below.NextUp)

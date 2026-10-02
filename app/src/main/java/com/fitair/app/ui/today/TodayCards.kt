@@ -11,10 +11,10 @@ import com.fitair.app.ui.components.MetricCardSkeleton
 import com.fitair.app.ui.metrics.MetricCards
 import com.fitair.app.ui.theme.Spacing
 
-/** The five Today cards (two large, three small) sitting straight on the page, without a wrapping card or summary text. */
+/** The four Today cards (two large, two small, compact) sitting straight on the page, without a wrapping card or summary text. */
 @Composable
 fun TodayCards(snap: MetricSnapshot?, mode: Mode, layout: TodayLayout, nowMs: Long, onCard: (MetricId) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         row(layout.large, CardSize.Large, snap, mode, nowMs, onCard)
         row(layout.small, CardSize.Small, snap, mode, nowMs, onCard)
     }
@@ -26,7 +26,7 @@ private fun row(ids: List<MetricId>, size: CardSize, snap: MetricSnapshot?, mode
         ids.forEach { id ->
             val m = Modifier.weight(1f).fillMaxHeight()
             if (snap == null) MetricCardSkeleton(size, m, onPage = true)
-            else MetricCard(MetricCards.card(id, snap, size, mode, nowMs), size, { onCard(id) }, m, onPage = true)
+            else MetricCard(MetricCards.card(id, snap, size, mode, nowMs), size, { onCard(id) }, m, onPage = true, compact = true)
         }
     }
 }

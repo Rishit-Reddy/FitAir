@@ -79,6 +79,9 @@ fun destFor(id: MetricId): TodayDest? = when (id) {
 
 private val WIDE = 600.dp
 
+/** Below this the page scrolls instead of squeezing the calendar panel. */
+private val MIN_FIXED_H = 640.dp
+
 /**
  * Today: header (date, "data to 14:05", gear), then the morning recap (until "Seen?") or five metric cards chosen by [todayLayout],
  * then Next up, today's agenda and Water. The AI summary is hidden for now (0.9.2). The mode is recomputed on open, on pull-to-refresh and
@@ -137,7 +140,8 @@ fun TodayScreen(
             awaitPointerEventScope { while (true) { awaitPointerEvent(PointerEventPass.Initial); vm.onTouched() } }
         },
     ) {
-        Page(scrollState = scroll) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        Page(scrollState = scroll, contentHeight = maxOf(maxHeight - Spacing.xl * 2, MIN_FIXED_H)) {
             val fresh = Format.freshness(now, ui?.lastSyncMs ?: 0L)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(ui?.date?.format(DATE_FMT) ?: "", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 1)
@@ -181,13 +185,10 @@ fun TodayScreen(
                 else TodayCards(ui.snapshot, cardMode, layout, now,
                     onCard = { id -> if (id == MetricId.Readiness && ui.readiness != null) sheet = true else destFor(id)?.let(onOpen) })
             }
-            val strips: @Composable (Boolean) -> Unit = { withAgenda ->
+            val belowCards: @Composable () -> Unit = {
                 layout.below.forEach { b ->
                     when (b) {
-                        Below.NextUp -> {
-                            NextUpStripBlock(agenda, mode, now, onOpenCalendar, requestCalendar)
-                            if (withAgenda && mode != Mode.Evening) AgendaBlock(agenda, rest = mode != Mode.Morning, onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
-                        }
+                        Below.NextUp -> Unit // the calendar panel replaces the Next up strip
                         Below.Water -> WaterBlock(ui, mode, vm, onEnableReminders = {
                             if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
                         })
@@ -195,20 +196,23 @@ fun TodayScreen(
                     }
                 }
             }
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val panel: @Composable (Modifier) -> Unit = { m ->
+                TodayCalendarPanel(agenda, mode == Mode.Evening, now, onOpenCalendar, requestCalendar, m)
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 if (maxWidth >= WIDE) {
-                    // unfolded: big card left (max 560 dp), Next up + today's agenda + Water on the right
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                        Column(Modifier.weight(1f).widthIn(max = 560.dp)) { hero() }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
-                            strips(false)
-                            AgendaBlock(agenda, rest = true, onOpen = onOpenCalendar, onRequest = requestCalendar, onSettings = { onOpen(TodayDest.Settings) })
-                        }
+                    // unfolded: cards and Water on the left (max 560 dp), the calendar panel on the right
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+                        Column(Modifier.weight(1f).widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); belowCards() }
+                        panel(Modifier.weight(1f).fillMaxHeight())
                     }
                 } else {
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { hero(); strips(true) }
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) {
+                        hero(); belowCards(); panel(Modifier.weight(1f).fillMaxWidth())
+                    }
                 }
             }
+        }
         }
     }
     val r = ui?.readiness
@@ -224,49 +228,6 @@ fun TodayScreen(
     }
 }
 
-/** Next up (Morning, Day) or "Tomorrow 08:00 Shift" (Evening) as a slim strip; a calendar prompt without permission. */
-@Composable
-private fun NextUpStripBlock(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        NextUpStripOnly(agenda, mode, nowMs, onOpenCalendar, onRequest)
-        if (agenda.active && agenda.loaded) AllDayLine.today(agenda.todayItems)?.let {
-            Text(it, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(start = Spacing.l, top = Spacing.s))
-        }
-        if (agenda.active && agenda.loaded && mode != Mode.Morning) {
-            val z = remember { ZoneId.systemDefault() }
-            val s = agenda.shiftToday(nowMs)
-            val line = s?.let { Copy.shiftTodayLine(AgendaFormat.range(Instant.ofEpochMilli(it.startMs), Instant.ofEpochMilli(it.endMs), z), it.avgPctHrr) }
-            if (line != null) Text(line, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(start = Spacing.l, top = Spacing.s))
-        }
-    }
-}
-
-@Composable
-private fun NextUpStripOnly(agenda: AgendaVm, mode: Mode, nowMs: Long, onOpenCalendar: () -> Unit, onRequest: () -> Unit) {
-    if (!agenda.active) {
-        Row(
-            Modifier.fillMaxWidth().clip(Shapes.tile).background(MaterialTheme.colorScheme.surfaceContainer).heightIn(min = 64.dp).padding(start = Spacing.l, end = Spacing.s),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("See today's events here", style = Type.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            TextButton(onClick = onRequest, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Show my calendar", style = Type.label) }
-        }
-        return
-    }
-    if (!agenda.loaded) return
-    val z = remember { ZoneId.systemDefault() }
-    val n = if (mode == Mode.Evening) null else AgendaFormat.nextUp(agenda.todayItems, Instant.ofEpochMilli(nowMs))
-    if (n != null) {
-        NextUpStrip("Next up", n.e.title.ifBlank { "Busy" }, AgendaFormat.nextUpLine(n, z),
-            agenda.colors.of(n.e)?.let { Color(it) }, n.running, onOpenCalendar)
-    } else {
-        val tomorrow = AgendaFormat.tomorrowLine(agenda.tomorrow, z)
-        NextUpStrip(if (mode == Mode.Evening) "Next up" else "Free for the rest of the day", tomorrow ?: "Nothing scheduled tomorrow", null, null, false, onOpenCalendar)
-    }
-}
-
 /** One quiet line for an alert-level insight (everything milder lives in the summary bullets). */
 @Composable
 private fun AlertLine(i: Insight) {
@@ -275,30 +236,6 @@ private fun AlertLine(i: Insight) {
         Spacer(Modifier.width(Spacing.m))
         Text("Worth a look: ${i.title}", style = Type.body)
     }
-}
-
-/** Quiet prompt while the calendar permission is missing. */
-@Composable
-private fun CalendarPrompt(onRequestCalendar: () -> Unit) {
-    Text("See today's events next to your readiness", style = Type.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    TextButton(onClick = onRequestCalendar) { Text("Show my calendar", style = Type.label) }
-}
-
-/** "AGENDA ›" (opens the Calendar tab), then rows with a "now" hairline, a quiet prompt, or the empty line. */
-@Composable
-private fun AgendaBlock(vm: AgendaVm, rest: Boolean, onOpen: () -> Unit, onRequest: () -> Unit, onSettings: () -> Unit) {
-    val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    val z = remember { ZoneId.systemDefault() }
-    Box(Modifier.heightIn(min = Spacing.minTouch).clickable(role = Role.Button, onClick = onOpen), contentAlignment = Alignment.CenterStart) {
-        SectionHeader(if (rest) "Rest of today ›" else "Agenda ›")
-    }
-    if (!vm.active) { CalendarPrompt(onRequest); return }
-    if (!vm.loaded) return
-    CalendarDiagnostic(vm.unsynced, onSettings)
-    if (!AgendaFormat.hasEvents(vm.todayItems)) { Text(AgendaFormat.emptyLine(), style = Type.body, color = dim); return }
-    val c = AgendaFormat.collapse(vm.todayItems)
-    AgendaList(c.visible, vm.colors, z, withEnd = false, markNow = true)
-    if (c.hidden) TextButton(onClick = onOpen) { Text("Show all (${c.eventCount})", style = Type.label) }
 }
 
 /** The Water strip (the layout drops it once the window has ended). */

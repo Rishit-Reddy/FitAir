@@ -27,10 +27,13 @@ import com.fitair.app.ui.theme.Type
 fun Page(
     modifier: Modifier = Modifier,
     scrollState: ScrollState = rememberScrollState(),
+    /** Fixed inner height (weights work inside); the page only scrolls when this is taller than the screen. */
+    contentHeight: androidx.compose.ui.unit.Dp? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = Spacing.gutter, vertical = Spacing.xl),
+        modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = Spacing.gutter, vertical = Spacing.xl)
+            .then(if (contentHeight != null) Modifier.height(contentHeight) else Modifier),
         content = content,
     )
 }

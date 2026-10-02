@@ -20,20 +20,20 @@ class TodayLayoutTest {
     @Test fun dayLeadsWithLoadAndHeart() {
         val l = todayLayout(Mode.Day)
         assertEquals(listOf(Load, Heart), l.large)
-        assertEquals(listOf(Readiness, Sleep, Energy), l.small)
+        assertEquals(listOf(Readiness, Sleep), l.small)
     }
 
-    @Test fun eveningKeepsTheLargePairAndRotatesTheSmallTrio() {
+    @Test fun eveningKeepsTheLargePairAndRotatesTheSmallPair() {
         val l = todayLayout(Mode.Evening)
         assertEquals(todayLayout(Mode.Day).large, l.large)
-        assertEquals(listOf(Energy, Steps, Bedtime), l.small)
+        assertEquals(listOf(Steps, Bedtime), l.small)
     }
 
-    @Test fun everyModeHasTwoLargeAndThreeSmallWithoutRepeats() {
+    @Test fun everyModeHasTwoLargeAndNoRepeats() {
         Mode.values().forEach { m ->
             val l = todayLayout(m)
-            assertEquals(2, l.large.size); assertEquals(3, l.small.size)
-            assertEquals(5, (l.large + l.small).toSet().size)
+            assertEquals(2, l.large.size); assertTrue(l.small.size in 2..3)
+            assertEquals(l.large.size + l.small.size, (l.large + l.small).toSet().size)
         }
     }
 
