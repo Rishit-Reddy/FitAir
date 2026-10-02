@@ -51,6 +51,16 @@ class CalendarRepo(private val ctx: Context) {
         catch (e: Exception) { AppLog.d("calendar: calendars() failed: ${e.message}"); emptyList() }
     }
 
+    /** Selected (or, with no choice yet, all) calendars that are not syncing to this phone. Blocking; call off the main thread. */
+    fun unsyncedSelected(): List<CalendarInfo> {
+        if (!hasPermission()) return emptyList()
+        return try {
+            val sel = CalendarPrefs.selectedIds(app)
+            queryCalendars(onlyVisibleSynced = false).map { it.first }.filter { !it.syncing && (sel == null || it.id in sel) }
+        } catch (e: SecurityException) { emptyList() }
+        catch (e: Exception) { AppLog.d("calendar: unsyncedSelected failed: ${e.message}"); emptyList() }
+    }
+
     suspend fun eventsForDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<CalEvent> = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext emptyList()
         try {
@@ -119,7 +129,8 @@ class CalendarRepo(private val ctx: Context) {
         val out = ArrayList<Pair<CalendarInfo, Boolean>>()
         app.contentResolver.query(CalendarContract.Calendars.CONTENT_URI, proj, sel, null, "${CalendarContract.Calendars.ACCOUNT_NAME} ASC")?.use { c ->
             while (c.moveToNext()) {
-                out.add(CalendarInfo(c.getLong(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getInt(3)) to (c.getInt(4) == 1 && c.getInt(5) == 1))
+                val sync = c.getInt(4) == 1 && c.getInt(5) == 1
+                out.add(CalendarInfo(c.getLong(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getInt(3), sync) to sync)
             }
         }
         return out

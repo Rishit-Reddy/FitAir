@@ -6,7 +6,8 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 
-data class CalendarInfo(val id: Long, val name: String, val account: String, val color: Int)
+/** [syncing] = VISIBLE and SYNC_EVENTS on the phone. A subscribed (ICS) calendar that is not syncing has no events here. */
+data class CalendarInfo(val id: Long, val name: String, val account: String, val color: Int, val syncing: Boolean = true)
 
 data class CalEvent(
     val instanceId: Long, val calId: Long, val title: String, val begin: Instant, val end: Instant,

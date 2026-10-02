@@ -32,30 +32,39 @@ object Format {
     fun compactCount(n: Long): String =
         if (n >= 10_000) String.format(Locale.US, "%.1fk", n / 1000.0) else thousands(n)
 
-    /** Readiness band word. */
+    /** 65 -> "1h 05m", 45 -> "45m" (legend and details; minutes zero-padded after an hour). */
+    fun hm(min: Long): String = if (min >= 60) "${min / 60}h %02dm".format(min % 60) else "${min}m"
+
+    /** In-bar label, long form: 65 -> "1h 05", 45 -> "45m". */
+    fun stageLong(min: Long): String = if (min >= 60) "${min / 60}h %02d".format(min % 60) else "${min}m"
+
+    /** In-bar label, short form: 65 -> "65m". */
+    fun stageShort(min: Long): String = "${min}m"
+
+    /** Readiness band word (plain wording; the full verdict lives in Copy.readiness). */
     fun band(score: Int?): String? = when {
         score == null -> null
-        score >= 70 -> "Ready"
-        score >= 50 -> "Steady"
-        else -> "Recover"
+        score >= 70 -> "Well recovered"
+        score >= 50 -> "Partly recovered"
+        else -> "Not recovered"
     }
 
-    /** "1.4 SD below baseline" / "near baseline". */
+    /** "1.4 SD below baseline" / "near baseline". Used by stored driver text only; never shown outside Details. */
     fun sdPhrase(z: Double): String =
         if (Math.abs(z) < 0.3) "near baseline"
         else String.format(Locale.US, "%.1f SD %s baseline", Math.abs(z), if (z > 0) "above" else "below")
 
     class Freshness(val text: String, val stale: Boolean)
 
-    /** "synced 12 min ago" below one hour, "stale 3 h" from one hour on. */
+    /** "synced 12 min ago" below one hour, "updated 3 h ago" from one hour on. */
     fun freshness(nowMs: Long, lastMs: Long): Freshness {
         if (lastMs <= 0) return Freshness("never synced", true)
         val min = Math.max(0L, (nowMs - lastMs) / 60_000L)
         return when {
             min < 1 -> Freshness("synced just now", false)
             min < 60 -> Freshness("synced $min min ago", false)
-            min < 48 * 60 -> Freshness("stale ${min / 60} h", true)
-            else -> Freshness("stale ${min / 1440} d", true)
+            min < 48 * 60 -> Freshness("updated ${min / 60} h ago", true)
+            else -> Freshness("updated ${min / 1440} d ago", true)
         }
     }
 

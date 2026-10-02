@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 
-/** Local SQLite copy of the health data plus the app tables (schema v3, see docs/ARCHITECTURE.md 3.2). */
+/** Local SQLite copy of the health data plus the app tables (schema v4, see docs/ARCHITECTURE.md 3.2 and docs/PLAN_081.md 4.1). */
 class LocalStore private constructor(private val ctx: Context) :
     SQLiteOpenHelper(ctx.applicationContext, FILE, null, VERSION) {
 
@@ -14,9 +14,10 @@ class LocalStore private constructor(private val ctx: Context) :
 
     companion object {
         const val FILE = "fitair.db"
-        const val VERSION = 3
+        const val VERSION = 4
         /** Tables added in schema v3 (not part of the sync/backup health tables in [TABLES]). */
-        val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg")
+        val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg",
+            "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary")
         val TABLES = listOf(
             "heart_rate", "steps", "distance", "total_calories", "resting_hr",
             "hrv", "respiratory_rate", "sleep", "sleep_stage", "exercise",
@@ -62,6 +63,7 @@ class LocalStore private constructor(private val ctx: Context) :
         s.forEach { db.execSQL(it) }
         createV2(db)
         createV3(db)
+        createV4(db)
         // fresh install: nothing to migrate
         db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES('$MIG_DONE','1')")
     }
@@ -97,10 +99,30 @@ class LocalStore private constructor(private val ctx: Context) :
         s.forEach { db.execSQL(it) }
     }
 
+    /** Schema v4 (docs/PLAN_081.md 4.1): whole-day load, session flags, weight, chat sessions, water, day summary. Additive only. */
+    private fun createV4(db: SQLiteDatabase) {
+        val s = listOf(
+            "CREATE TABLE IF NOT EXISTS load_day(date TEXT PRIMARY KEY, cardio REAL, z_light INTEGER, z_mod INTEGER, z_vig INTEGER, z_peak INTEGER, " +
+                "hourly_json TEXT, coverage REAL, hr_max REAL, hr_rest REAL, acute REAL, chronic REAL, ratio REAL, computed_ms INTEGER)",
+            "CREATE TABLE IF NOT EXISTS exercise_flag(start_ms INTEGER NOT NULL, origin TEXT NOT NULL, end_ms INTEGER NOT NULL, " +
+                "verdict TEXT NOT NULL, auto INTEGER NOT NULL, set_ms INTEGER NOT NULL, PRIMARY KEY(start_ms, origin))",
+            "CREATE TABLE IF NOT EXISTS weight(t INTEGER NOT NULL, kg REAL NOT NULL, fat_pct REAL, origin TEXT NOT NULL, PRIMARY KEY(t, origin))",
+            "CREATE TABLE IF NOT EXISTS chat_session(id TEXT PRIMARY KEY, title TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS chat_turn(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, ts INTEGER NOT NULL, " +
+                "role TEXT NOT NULL, text TEXT, answer_json TEXT, trace TEXT, long INTEGER, truncated INTEGER)",
+            "CREATE INDEX IF NOT EXISTS idx_chat_turn_session ON chat_turn(session_id, id)",
+            "CREATE TABLE IF NOT EXISTS water(t INTEGER NOT NULL, ml REAL NOT NULL, origin TEXT NOT NULL, hc_id TEXT, PRIMARY KEY(t, origin))",
+            "CREATE TABLE IF NOT EXISTS day_summary(date TEXT PRIMARY KEY, facts_json TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, " +
+                "model TEXT, created_ms INTEGER NOT NULL)",
+        )
+        s.forEach { db.execSQL(it) }
+    }
+
     /** Cheap schema-only upgrade; the heavy heart-rate rebuild runs later in [migrateHeartRate] (IO thread). */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2(db)
         if (oldVersion < 3) createV3(db)
+        if (oldVersion < 4) createV4(db)
         // never drop anything here
     }
 
