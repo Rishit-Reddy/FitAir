@@ -65,7 +65,7 @@ object DailyMetrics {
      */
     fun migrateIfNeeded(ctx: Context) = synchronized(lock) {
         val store = LocalStore.get(ctx)
-        if (store.metaGet(MIG_READINESS) != null) return@synchronized
+        if (store.metaGet(MIG_READINESS) == ReadinessMath.VERSION.toString()) return@synchronized
         if (!hasSynced(ctx) || !hasInputs(store)) { AppLog.d("readiness v3 migration: waiting for the first sync"); return@synchronized }
         val today = LocalDate.now(ZoneId.systemDefault())
         AppLog.d("readiness v3: recomputing last $MIG_DAYS days")

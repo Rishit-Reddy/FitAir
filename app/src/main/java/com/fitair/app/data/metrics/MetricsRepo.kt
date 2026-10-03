@@ -172,8 +172,10 @@ object MetricsRepo {
         val loadToday = if (isToday) LoadDao.today(ctx) else null
         val load = days.map { d -> if (isToday && d == date && live != null) live.cardio else loadBy[d.toString()]?.cardio }
         val ndays = (28 downTo 1).map { date.minusDays(it.toLong()).toString() }
-        val usual = MetricStats.usual(ndays.map { loadBy[it]?.cardio })
-        val typical = MetricStats.typicalHourly(ndays.mapNotNull { loadBy[it]?.hourly })
+        // days with the band mostly off (coverage under 60 %) would drag "usual" towards zero
+        val fullDays = ndays.map { loadBy[it]?.takeIf { r -> (r.coverage ?: 0.0) >= com.fitair.app.analytics.CardioLoad.PARTIAL_BELOW } }
+        val usual = MetricStats.usual(fullDays.map { it?.cardio })
+        val typical = MetricStats.typicalHourly(fullDays.mapNotNull { it?.hourly })
         val cum: DoubleArray? = if (live != null) live.hourly else loadBy[date.toString()]?.hourly
         val nowHour = java.time.Instant.ofEpochMilli(nowMs).atZone(z).hour
         val loadHourly: List<Double?> = (0 until 24).map { h ->

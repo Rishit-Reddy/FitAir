@@ -9,9 +9,9 @@ import com.fitair.app.core.Num
 object SleepMath {
     val WEIGHTS = linkedMapOf("duration" to 0.40, "efficiency" to 0.25, "restorative" to 0.20, "consistency" to 0.15)
 
-    /** Personal need: 450 min moved halfway toward the 28-day typical, clamped to 360..540; 450 without a typical. */
+    /** Personal need: 450 min moved halfway toward the 28-day typical, clamped to 420..540 (adults need 7-9 h); 450 without a typical. */
     fun need(typical: Double?): Double =
-        if (typical != null) (450.0 + 0.5 * (typical - 450.0)).coerceIn(360.0, 540.0) else 450.0
+        if (typical != null) (450.0 + 0.5 * (typical - 450.0)).coerceIn(420.0, 540.0) else 450.0
 
     fun durationScore(asleepMin: Double, need: Double) = Num.clip(asleepMin / need * 100)
 

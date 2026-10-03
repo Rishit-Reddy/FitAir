@@ -67,7 +67,7 @@ class ReadinessMathTest {
         assertEquals(100.0, ReadinessMath.acwrScore(1.0), 0.0)
         assertEquals(100.0, ReadinessMath.acwrScore(1.3), 1e-9)
         assertEquals(70.0, ReadinessMath.acwrScore(1.45), 1e-9)
-        assertEquals(90.0, ReadinessMath.acwrScore(0.7), 1e-9)
+        assertEquals(100.0, ReadinessMath.acwrScore(0.7), 1e-9)   // a quiet week does not lower readiness
         assertEquals(0.0, ReadinessMath.acwrScore(2.5), 0.0)
     }
 
@@ -77,13 +77,13 @@ class ReadinessMathTest {
         assertEquals(100.0, ReadinessMath.subjectiveScore(5.0), 0.0)
     }
 
-    @Test fun versionIsThreeWithWholeDayLoadDriver() {
-        assertEquals(3, ReadinessMath.VERSION)
+    @Test fun versionIsFourWithWholeDayLoadDriver() {
+        assertEquals(4, ReadinessMath.VERSION)
         assertEquals("load", ReadinessMath.WEIGHTS.keys.first { it == "load" })
     }
 
     @Test fun loadRatioScoreBands() = listOf(
         // ratio, score
-        0.5 to 70.0, 0.8 to 100.0, 1.0 to 100.0, 1.3 to 100.0, 1.4 to 80.0, 1.5 to 60.0, 2.0 to 0.0, 0.0 to 20.0,
+        0.5 to 100.0, 0.8 to 100.0, 1.0 to 100.0, 1.3 to 100.0, 1.4 to 80.0, 1.5 to 60.0, 2.0 to 0.0, 0.0 to 100.0,
     ).forEach { (r, sc) -> assertEquals("ratio $r", sc, ReadinessMath.acwrScore(r), 1e-9) }
 }

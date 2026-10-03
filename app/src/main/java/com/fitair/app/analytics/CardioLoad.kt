@@ -125,13 +125,14 @@ object CardioLoad {
     // ---------- acute / chronic ----------
 
     class Ewma(val acute: Double, val chronic: Double, val history: Int) {
-        /** acute/chronic, or null with < 14 days of history or a near-zero chronic load. */
-        val ratio: Double? get() = if (history >= 14 && chronic >= 1.0) acute / chronic else null
+        /** acute/chronic, or null with < 28 days of history (one full chronic window) or a near-zero chronic load. */
+        val ratio: Double? get() = if (history >= 28 && chronic >= 1.0) acute / chronic else null
     }
 
     /**
-     * EWMA 7 d / 28 d over [daily] (index 0 = oldest). [hasData] marks days with any data; the series starts at the first such day,
-     * earlier entries are null.
+     * EWMA 7 d / 28 d over [daily] (index 0 = oldest). [hasData] marks usable days (complete, band worn for most of the day); the
+     * series starts at the first such day, earlier entries are null. A day that is not usable (band off, or today still running)
+     * leaves acute and chronic unchanged instead of counting as zero load, which would fake a rest week.
      */
     fun ewma(daily: List<Double>, hasData: List<Boolean>): List<Ewma?> {
         val a7 = 2.0 / 8; val a28 = 2.0 / 29
@@ -139,8 +140,8 @@ object CardioLoad {
         var acute = 0.0; var chronic = 0.0; var first = -1
         for (i in daily.indices) {
             val x = daily[i]
-            if (first < 0 && (hasData[i] || x > 0)) { first = i; acute = x; chronic = x }
-            else if (first >= 0) { acute += a7 * (x - acute); chronic += a28 * (x - chronic) }
+            if (first < 0 && hasData[i]) { first = i; acute = x; chronic = x }
+            else if (first >= 0 && hasData[i]) { acute += a7 * (x - acute); chronic += a28 * (x - chronic) }
             out.add(if (first >= 0) Ewma(acute, chronic, i - first + 1) else null)
         }
         return out

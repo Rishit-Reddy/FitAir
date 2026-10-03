@@ -102,11 +102,23 @@ class CardioLoadTest {
         val flat = List(40) { 50.0 }
         val e = CardioLoad.ewma(flat, List(40) { true })
         assertEquals(1.0, e.last()!!.ratio!!, 1e-9)
-        assertNull(e[5]!!.ratio)                        // < 14 days of history
+        assertNull(e[5]!!.ratio)                        // < 28 days of history
+        assertNull(e[26]!!.ratio)
+        assertNotNull(e[27]!!.ratio)
         val spike = flat.take(39) + listOf(200.0)
         assertTrue(CardioLoad.ewma(spike, List(40) { true }).last()!!.ratio!! > 1.3)
         assertNull(CardioLoad.ewma(List(30) { 0.0 }, List(30) { true }).last()!!.ratio)   // chronic ~ 0
         assertNull(CardioLoad.ewma(listOf(0.0, 0.0), listOf(false, false)).last())
+    }
+
+    @Test fun daysWithoutUsableDataLeaveTheAveragesAlone() {
+        val usable = List(40) { it < 30 || it >= 36 }   // band off for days 30..35
+        val daily = List(40) { if (usable[it]) 50.0 else 0.0 }
+        val e = CardioLoad.ewma(daily, usable)
+        assertEquals(e[29]!!.chronic, e[35]!!.chronic, 1e-12)
+        assertEquals(e[29]!!.acute, e[35]!!.acute, 1e-12)
+        assertEquals(1.0, e.last()!!.ratio!!, 1e-6)          // no fake rest week after the gap
+        assertNull(CardioLoad.ewma(List(5) { 10.0 }, List(5) { false }).last())   // never started
     }
 
     @Test fun verdictBands() = listOf(null to null, 0.5 to "lighter", 0.8 to "normal", 1.3 to "normal", 1.4 to "harder", 1.5 to "harder", 1.6 to "much_harder")

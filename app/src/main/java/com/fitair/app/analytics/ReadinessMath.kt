@@ -9,7 +9,7 @@ import com.fitair.app.core.Num
  * Missing components are dropped and the rest renormalised. Needs at least 2 components.
  */
 object ReadinessMath {
-    const val VERSION = 3
+    const val VERSION = 4
     const val MIN_COMPONENTS = 2
     val WEIGHTS = linkedMapOf("sleep" to 0.30, "hrv" to 0.25, "resting_hr" to 0.15, "load" to 0.15, "subjective" to 0.15)
     val LABELS = mapOf("sleep" to "Sleep", "hrv" to "HRV", "resting_hr" to "Resting HR",
@@ -23,8 +23,8 @@ object ReadinessMath {
     /** sign +1: higher is better (HRV); -1: lower is better (resting HR). */
     fun zScore(z: Double, sign: Int) = Num.clip(75 + 25 * sign * z)
 
-    /** 0.8-1.3 is the comfortable ACWR range. */
-    fun acwrScore(a: Double) = Num.clip(if (a > 1.3) 100 - (a - 1.3) * 200 else if (a < 0.8) 100 - (0.8 - a) * 100 else 100.0)
+    /** Only a high acute:chronic ratio lowers readiness: less recent load means fresher (the 0.8 floor is an injury-risk idea, not readiness). */
+    fun acwrScore(a: Double) = Num.clip(if (a > 1.3) 100 - (a - 1.3) * 200 else 100.0)
 
     /** Check-in mean on 1..5 (5 = best) to 0..100. */
     fun subjectiveScore(mean15: Double) = Num.clip((mean15 - 1) / 4 * 100)

@@ -14,6 +14,14 @@ android {
         targetSdk = 36
         versionCode = 28
         versionName = "0.9.3"
+        manifestPlaceholders["appLabel"] = "FitAir"
+        // ./gradlew assembleRelease -Ppreview installs next to the stable app (own data, own name); Drive sign-in is not registered for it.
+        if (project.hasProperty("preview")) {
+            applicationIdSuffix = ".preview"
+            versionName = "0.9.4-preview1"
+            versionCode = 29
+            manifestPlaceholders["appLabel"] = "FitAir Preview"
+        }
     }
 
     signingConfigs {

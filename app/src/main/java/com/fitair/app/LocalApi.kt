@@ -21,7 +21,7 @@ object LocalApi {
     private val STAGE_NAMES = mapOf(0 to "unknown", 1 to "awake", 2 to "sleeping", 3 to "out_of_bed",
         4 to "light", 5 to "deep", 6 to "rem", 7 to "awake_in_bed")
     private val ASLEEP = setOf(2, 4, 5, 6)
-    private const val MIN_BASELINE_DAYS = 7
+    private const val MIN_BASELINE_DAYS = 14
     private const val DEFAULT_INTENSITY = 0.6
 
     /** HRmax: pref hr_max, else 208 - 0.7 x age, else observed P99.5 + 5, else 190 (see [LoadDao.hrMax]). */

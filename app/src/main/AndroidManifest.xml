@@ -36,7 +36,7 @@
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="FitAir"
+        android:label="${appLabel}"
         android:theme="@style/Theme.FitAir">
 
         <activity

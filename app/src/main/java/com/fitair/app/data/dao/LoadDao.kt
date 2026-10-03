@@ -216,7 +216,7 @@ object LoadDao {
             val old = have[key]
             val need = old == null || (key in wanted && (force || today.toEpochDay() - d.toEpochDay() <= 1))
             if (!need) {
-                cardio[i] = old!!.cardio; hasData[i] = (old.coverage ?: 0.0) > 0.0 || old.cardio > 0.0; continue
+                cardio[i] = old!!.cardio; hasData[i] = d != today && (old.coverage ?: 0.0) >= CardioLoad.PARTIAL_BELOW; continue
             }
             val (lo, hi) = LocalApi.bounds(d, z)
             val rest = restFor(ctx, d, z)
@@ -232,7 +232,7 @@ object LoadDao {
             v.put("hr_max", hm); v.put("hr_rest", rest); v.putNull("acute"); v.putNull("chronic"); v.putNull("ratio"); v.put("computed_ms", now)
             db.insertWithOnConflict("load_day", null, v, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
             touched.add(key)
-            cardio[i] = r.cardio; hasData[i] = all.isNotEmpty()
+            cardio[i] = r.cardio; hasData[i] = d != today && all.isNotEmpty() && (r.coverage ?: 0.0) >= CardioLoad.PARTIAL_BELOW
         }
         val ew = CardioLoad.ewma(cardio.toList(), hasData.toList())
         db.beginTransaction()
@@ -270,7 +270,7 @@ object LoadDao {
             val d = LocalDate.now(z)
             val live = live(ctx, d) ?: return LoadToday(0.0, null, rows(ctx, d.minusDays(3), d).lastOrNull { it.ratio != null }?.ratio, null, true)
             val ratio = rows(ctx, d.minusDays(3), d).lastOrNull { it.ratio != null }?.ratio
-            val hist = rows(ctx, d.minusDays(28), d.minusDays(1)).map { it.hourly }
+            val hist = rows(ctx, d.minusDays(28), d.minusDays(1)).filter { (it.coverage ?: 0.0) >= CardioLoad.PARTIAL_BELOW }.map { it.hourly }
             val zdt = Instant.now().atZone(z)
             val typical = CardioLoad.typicalByNow(hist, zdt.hour, zdt.minute / 60.0)
             LoadToday(live.cardio, typical, ratio, live.coverage, CardioLoad.isPartial(live.coverage))

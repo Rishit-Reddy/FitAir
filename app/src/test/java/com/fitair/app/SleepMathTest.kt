@@ -10,7 +10,7 @@ class SleepMathTest {
     @Test fun needAdaptsAndClamps() {
         assertEquals(450.0, SleepMath.need(null), 0.0)
         assertEquals(420.0, SleepMath.need(390.0), 1e-9)
-        assertEquals(360.0, SleepMath.need(100.0), 0.0)
+        assertEquals(420.0, SleepMath.need(100.0), 0.0)   // adults need at least 7 h
         assertEquals(540.0, SleepMath.need(900.0), 0.0)
     }
 

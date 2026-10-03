@@ -131,8 +131,11 @@ object Copy {
         if (typicalByNow == null) return Verdict("Building your usual", num + suffix)
         if (typicalByNow < 1.0 && soFar < 1.0) return Verdict("Quiet so far", num + suffix)
         val r = soFar / maxOf(typicalByNow, 1.0)
-        val head = when { r < 0.75 -> "Lighter than usual so far"; r <= 1.25 -> "About usual for this time"; else -> "Heavier than usual so far" }
-        return Verdict(head, num + suffix)
+        return when {
+            r < 0.75 -> Verdict("Lighter than usual so far", num + suffix, Tone.Neutral)
+            r <= 1.25 -> Verdict("About usual for this time", num + suffix, Tone.Good)
+            else -> Verdict("Heavier than usual so far", num + suffix, Tone.Caution)
+        }
     }
 
     // ---- water -----------------------------------------------------------------------------------------------
