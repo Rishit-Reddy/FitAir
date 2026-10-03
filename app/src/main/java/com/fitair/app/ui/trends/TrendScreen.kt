@@ -65,6 +65,7 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
         val tone = TrendMath.tone(metric, shown.value, ui.band)
 
         // today's value, what it means, then the history
+        SurfaceCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionHeader(
                 when {
@@ -84,7 +85,7 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
         Text(verdict, style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(Spacing.s))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(fmt(shown.value, metric), style = MaterialTheme.typography.headlineMedium)
+            Text(fmt(shown.value, metric), style = Type.valueL)
             Spacer(Modifier.width(Spacing.xs))
             Text(metric.unit, style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = Spacing.xs))
             if (tone != Tone.Neutral) {
@@ -97,10 +98,11 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
         }
         Spacer(Modifier.height(Spacing.s))
         if (metric != TrendMetric.Load) Text(TrendMath.interpret(metric.title, values, ui.band), style = Type.body)
+        }
 
         if (metric == TrendMetric.Readiness) {
             Spacer(Modifier.height(Spacing.l))
-            Column(Modifier.fillMaxWidth().clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l)) {
+            SurfaceCard {
                 SectionHeader("Main drivers")
                 Spacer(Modifier.height(Spacing.xs))
                 if (shown.drivers.isEmpty()) Text("No breakdown stored for this day.", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -108,7 +110,8 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
             }
         }
 
-        SectionBreak()
+        Spacer(Modifier.height(Spacing.gap))
+        SurfaceCard {
         SectionHeader("Trend")
         Spacer(Modifier.height(Spacing.s))
         SubTabs(SPANS.map { "$it days" }, spanIdx, { spanIdx = it })
@@ -127,6 +130,8 @@ fun TrendScreen(metric: TrendMetric, onBack: () -> Unit) {
                 Text("${Copy.BAND_NOTE}, ${fmt(ui.band.lo, metric)}–${fmt(ui.band.hi, metric)} $deltaUnit",
                     style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+
         }
 
         if (sel != null) {
