@@ -19,7 +19,7 @@ android {
         if (project.hasProperty("preview")) {
             applicationIdSuffix = ".preview"
             versionName = "0.9.4-preview2"
-            versionCode = 29
+            versionCode = 30
             manifestPlaceholders["appLabel"] = "FitAir Preview"
         }
     }
