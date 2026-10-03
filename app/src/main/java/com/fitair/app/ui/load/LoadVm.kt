@@ -28,6 +28,11 @@ class LoadUi(
     val hrMax: CardioLoad.HrMax,
     val sessions: List<SessionRow>,
     val shifts: List<com.fitair.app.analytics.WorkWindowStats> = emptyList(),   // today's work windows with heart-rate figures
+    /** Cumulative load at the end of each hour (null for hours to come), and the median by hour over the last 28 days. */
+    val hourly: List<Double?> = emptyList(),
+    val typicalHourly: List<Double?> = emptyList(),
+    /** Median daily load over the last 28 days. */
+    val usual: Double? = null,
 )
 
 /** State of the Load screen. Everything is read from the local DB; verdict wording comes from Copy. */
@@ -58,12 +63,14 @@ class LoadVm(app: Application) : AndroidViewModel(app) {
         val live = LoadDao.live(ctx, today)
         val days = (27 downTo 0).map { k -> today.minusDays(k.toLong()).let { it to rows[it.toString()] } }
         val lt = LoadDao.today(ctx)
+        val snap = runCatching { com.fitair.app.data.metrics.MetricsRepo.snapshot(ctx, today) }.getOrNull()
         return LoadUi(
             today = lt,
             zones = intArrayOf(live?.zLight ?: 0, live?.zMod ?: 0, live?.zVig ?: 0, live?.zPeak ?: 0),
             days = days, ratio = lt.ratio ?: rows.values.lastOrNull { it.ratio != null }?.ratio,
             hrMax = LoadDao.hrMax(ctx), sessions = LoadDao.sessionRows(ctx, today.minusDays(13), today),
             shifts = runCatching { com.fitair.app.analytics.WorkIntensity.forDay(ctx, today) }.getOrDefault(emptyList()),
+            hourly = snap?.loadHourly ?: emptyList(), typicalHourly = snap?.typicalHourly ?: emptyList(), usual = snap?.loadUsual,
         )
     }
 
