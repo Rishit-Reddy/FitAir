@@ -334,6 +334,18 @@ class LocalStore private constructor(private val ctx: Context) :
     }
 
     /** Latest time stored for [type] (t, or end_ms for interval types); null if empty. */
+    /** Deletes stored sleep sessions (and their stages) that started inside the re-read window but were not returned by Health Connect. Returns how many. */
+    fun pruneSleep(fromMs: Long, seen: Set<Pair<Long, String>>): Int {
+        val local = ArrayList<Pair<Long, String>>()
+        db.rawQuery("SELECT start_ms, origin FROM sleep WHERE start_ms>=?", arrayOf(fromMs.toString())).use { while (it.moveToNext()) local.add(it.getLong(0) to it.getString(1)) }
+        val gone = com.fitair.app.SessionPrune.orphans(local, seen, fromMs)
+        for ((s, o) in gone) {
+            db.delete("sleep_stage", "sleep_start_ms=? AND origin=?", arrayOf(s.toString(), o))
+            db.delete("sleep", "start_ms=? AND origin=?", arrayOf(s.toString(), o))
+        }
+        return gone.size
+    }
+
     fun maxT(type: String): Long? {
         if (type == "heart_rate") {
             db.rawQuery("SELECT MAX(t30) FROM hr_30s", null).use { c ->

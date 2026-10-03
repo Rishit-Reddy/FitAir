@@ -51,7 +51,9 @@ class SyncRepo(private val context: Context) {
                 }
                 val wm = store.maxT(type)
                 AppLog.d("[$type] local maxT=${wm ?: "none"}")
-                val from = SyncWindow.from(wm, now, defaultDays, OVERLAP)
+                val isSession = type == "sleep" || type == "exercise"
+                val from = if (isSession) SyncWindow.sessionFrom(wm, now, defaultDays, OVERLAP) else SyncWindow.from(wm, now, defaultDays, OVERLAP)
+                val seenSleep = HashSet<Pair<Long, String>>()
                 var n = 0
                 val buf = ArrayList<JSONObject>()
                 fun flush() {
@@ -66,11 +68,16 @@ class SyncRepo(private val context: Context) {
                     pages++
                     if (pages == 1 || pages % 10 == 0) AppLog.d("[$type] read page $pages (${page.size} items) from Health Connect")
                     for (o in page) {
+                        if (type == "sleep") seenSleep.add(o.getLong("start") to o.optString("origin", ""))
                         buf.add(o)
                         if (buf.size >= BATCH) flush()
                     }
                 }
                 flush()
+                if (type == "sleep") {
+                    val gone = store.pruneSleep(from.toEpochMilli(), seenSleep)
+                    AppLog.d("[sleep] Health Connect returned ${seenSleep.size} session(s) since the re-read window start" + if (gone > 0) "; removed $gone replaced session(s)" else "")
+                }
                 AppLog.d("[$type] done: $n rows over $pages pages in ${System.currentTimeMillis() - tType} ms")
                 written[type] = n
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
