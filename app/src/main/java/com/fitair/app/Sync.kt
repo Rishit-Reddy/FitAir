@@ -51,8 +51,7 @@ class SyncRepo(private val context: Context) {
                 }
                 val wm = store.maxT(type)
                 AppLog.d("[$type] local maxT=${wm ?: "none"}")
-                val from = if (wm == null) now.minus(Duration.ofDays(defaultDays))
-                else Instant.ofEpochMilli(wm).minus(OVERLAP)
+                val from = SyncWindow.from(wm, now, defaultDays, OVERLAP)
                 var n = 0
                 val buf = ArrayList<JSONObject>()
                 fun flush() {
@@ -74,9 +73,14 @@ class SyncRepo(private val context: Context) {
                 flush()
                 AppLog.d("[$type] done: $n rows over $pages pages in ${System.currentTimeMillis() - tType} ms")
                 written[type] = n
-            } catch (e: Exception) {
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: SecurityException) {
                 AppLog.e("[$type] failed after ${System.currentTimeMillis() - tType} ms", e)
                 throw e
+            } catch (e: Exception) {
+                // one broken type must not stop sleep and heart rate behind it; the next sync tries it again
+                AppLog.e("[$type] failed after ${System.currentTimeMillis() - tType} ms (continuing with the other types)", e)
+                prefs.edit().putString(SyncPrefs.STATUS, "partial: $type failed").apply()
             }
         }
         try { backfillWorkoutHr(now) } catch (e: Exception) { AppLog.e("workout HR backfill failed", e) }
