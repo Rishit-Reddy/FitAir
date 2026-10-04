@@ -8,7 +8,7 @@ import com.fitair.app.data.metrics.MetricStats
 import com.fitair.app.ui.theme.ZoneColors
 
 /**
- * Draws a heart rate line one segment at a time, each segment in the colour of the zone its later point is in.
+ * Draws a heart rate line one segment at a time, each segment in the colour of the zone its later point is in (grey below Light).
  * [vals] are bpm (NaN = gap, breaks the line); [ys] are the pixel heights of the same points.
  */
 fun DrawScope.zoneLine(xs: List<Float>, ys: List<Float?>, vals: FloatArray, zoneBpm: FloatArray?, colors: ZoneColors, fallback: Color, width: Float) {
