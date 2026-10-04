@@ -37,7 +37,6 @@ import com.fitair.app.ui.components.Page
 import com.fitair.app.ui.components.SectionBreak
 import com.fitair.app.ui.components.SectionHeader
 import com.fitair.app.ui.components.SelectionCard
-import com.fitair.app.ui.components.StatRow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -65,6 +64,9 @@ private fun clockOfBin(i: Int) = Format.clock(i * 5 / 60, i * 5 % 60)
 @Composable
 fun HeartDayScreen(onBack: () -> Unit) {
     val vm: HeartDayVm = viewModel()
+    val trendVm: HeartTrendsVm = viewModel()
+    LaunchedEffect(Unit) { trendVm.load() }
+    val trends = trendVm.ui
     var back by rememberSaveable { mutableIntStateOf(0) }
     var selected by remember(back) { mutableStateOf<Int?>(null) }
     LaunchedEffect(back) { vm.load(back) }
@@ -114,31 +116,36 @@ fun HeartDayScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(Spacing.m))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 StatTile("Resting", Math.round(ui.restingDay ?: ui.rest.toDouble()).toString(), Modifier.weight(1f))
+                StatTile("Overnight low", ui.overnightLow?.bpm?.toString() ?: Format.DASH, Modifier.weight(1f), sub = lowSub(ui.overnightLow))
+            }
+            Spacer(Modifier.height(Spacing.s))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 StatTile("Average", ui.avg?.let { Math.round(it).toString() } ?: Format.DASH, Modifier.weight(1f))
                 StatTile("Highest", ui.max?.toString() ?: Format.DASH, Modifier.weight(1f))
             }
-            Spacer(Modifier.height(Spacing.s))
             ui.coverage?.let {
                 val pct = Math.round(it * 100).toInt()
+                Spacer(Modifier.height(Spacing.s))
                 Text(if (it < 0.6) "Heart rate was recorded for about $pct% of the daytime, so this day is partial." else "Heart rate recorded for about $pct% of the daytime.",
                     style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
-            SectionBreak()
-            SectionHeader("Time in each zone")
-            Spacer(Modifier.height(Spacing.xs))
-            val zm = ui.zoneMin
-            val names = ZONE_NAMES.drop(1)
-            names.forEachIndexed { i, n ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(10.dp).clip(CircleShape).background(zcol[i + 1]))
-                    Spacer(Modifier.width(Spacing.s))
-                    StatRow("$n · ${Math.round(ui.zoneBpm[i])}+ bpm", zm?.get(i)?.let { Format.hm(it.toLong()) } ?: Format.DASH, Modifier.weight(1f))
-                }
+            Spacer(Modifier.height(Spacing.xl))
+            ZoneTimeCard(ui.zoneMin, ui.zoneBpm, ui.hrMax, ui.hrMaxSource)
+            if (ui.recoveries.isNotEmpty()) {
+                Spacer(Modifier.height(Spacing.m))
+                RecoveryCard(ui.recoveries)
             }
-            Spacer(Modifier.height(Spacing.s))
-            Text("Zones use a maximum heart rate of ${Math.round(ui.hrMax)} bpm (${ui.hrMaxSource}). You can change it in Settings.",
-                style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            trends?.let { t ->
+                SectionBreak()
+                SectionHeader("Trends")
+                Spacer(Modifier.height(Spacing.m))
+                RestingTrendCard(t)
+                Spacer(Modifier.height(Spacing.m))
+                WeekZonesCard(t)
+                t.shifts?.let { Spacer(Modifier.height(Spacing.m)); ShiftCompareCard(it) }
+            }
         }
     }
 }
@@ -242,25 +249,3 @@ private fun DrawScope.yText(m: TextMeasurer, style: androidx.compose.ui.text.Tex
     drawText(r, color, Offset(gutter - r.size.width - 6.dp.toPx(), (yCenter - r.size.height / 2f).coerceAtLeast(0f)))
 }
 
-/** Big number with its unit, then the zone name in the zone's colour. */
-@Composable
-private fun ZoneReading(bpm: Int, zone: String, color: Color) {
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(bpm.toString(), style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.width(Spacing.xs))
-        Text("bpm", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-        Spacer(Modifier.width(Spacing.m))
-        Box(Modifier.padding(bottom = 8.dp).size(10.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(Spacing.xs))
-        Text(zone, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 2.dp))
-    }
-}
-
-@Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier.clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.m, vertical = Spacing.m)) {
-        Text(label.uppercase(), style = Type.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(Spacing.xs))
-        Text(value, style = MaterialTheme.typography.headlineMedium)
-    }
-}
