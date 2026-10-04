@@ -16,7 +16,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
         with:
-          packages: ''   # the runner already has the SDK; installing 'tools' now fails (sdkmanager: Failed to find package 'tools')
+          packages: 'platform-tools'   # avoid default 'tools' package, which sdkmanager no longer provides
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests
         run: ./gradlew --no-daemon :app:testDebugUnitTest
