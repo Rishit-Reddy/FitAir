@@ -32,7 +32,10 @@ import androidx.compose.ui.unit.dp
 import com.fitair.app.ui.components.StageBar
 import com.fitair.app.ui.components.Tone
 import com.fitair.app.ui.components.toneColor
+import com.fitair.app.ui.theme.LocalZoneColors
 import com.fitair.app.ui.theme.Type
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import com.fitair.app.ui.trends.Band
 
 /** Reference line style of [Mini.Bars]: "usual" is a dim dashed line, "goal" is not used (no goals). */
@@ -200,14 +203,15 @@ fun Ring(fraction: Float, size: Dp, modifier: Modifier = Modifier) {
 /** 288 five-minute means 00-24 h, zone thresholds as dotted hairlines, dashed resting line. NaN breaks the line. */
 @Composable
 fun HrDayLine(points: FloatArray, rest: Float?, zoneBpm: FloatArray?, height: Dp, modifier: Modifier = Modifier) {
-    val ink = ink(); val dim = faint()
+    val ink = ink(); val dim = faint(); val zones = LocalZoneColors.current
+    val measurer = rememberTextMeasurer(); val cap = Type.axis
     Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { }) {
         val n = points.size
         if (n == 0) return@Canvas
         val valid = points.filter { !it.isNaN() }
         val padY = 4.dp.toPx()
         var lo = minOf(valid.minOrNull() ?: 50f, rest ?: 999f) - 4f
-        var hi = (valid.maxOrNull() ?: 100f) + 4f
+        var hi = (valid.maxOrNull() ?: 100f) + 12f
         if (zoneBpm != null && zoneBpm.isNotEmpty()) hi = maxOf(hi, zoneBpm[0] + 8f)
         if (hi - lo < 20f) hi = lo + 20f
         fun y(v: Float) = scaleY(v.toDouble(), lo.toDouble(), hi.toDouble(), padY, size.height - padY)
@@ -216,9 +220,16 @@ fun HrDayLine(points: FloatArray, rest: Float?, zoneBpm: FloatArray?, height: Dp
         if (rest != null) drawLine(dim, Offset(0f, y(rest)), Offset(size.width, y(rest)), 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())))
         val xs = List(n) { size.width * it / (n - 1).coerceAtLeast(1) }
         val ys = points.map { if (it.isNaN()) null else y(it) }
-        polyline(xs, ys, ink, 1.5.dp.toPx())
-        // a single isolated reading has no line to draw: show it as a dot
-        for (i in 0 until n) if (ys[i] != null && (i == 0 || ys[i - 1] == null) && (i == n - 1 || ys[i + 1] == null)) drawCircle(ink, 2.dp.toPx(), Offset(xs[i], ys[i]!!))
+        zoneLine(xs, ys, points, zoneBpm, zones, ink, 1.8.dp.toPx())
+        // the day's highest and lowest reading as numbers, placed beside their point and kept inside the chart
+        val iMax = points.indices.filter { !points[it].isNaN() }.maxByOrNull { points[it] }
+        val iMin = points.indices.filter { !points[it].isNaN() }.minByOrNull { points[it] }
+        for ((idx, up) in listOfNotNull(iMax?.let { it to true }, iMin?.takeIf { it != iMax }?.let { it to false })) {
+            val r = measurer.measure(Math.round(points[idx]).toString(), cap)
+            val tx = (xs[idx] - r.size.width / 2f).coerceIn(0f, size.width - r.size.width)
+            val ty = if (up) y(points[idx]) - r.size.height - 2.dp.toPx() else y(points[idx]) + 2.dp.toPx()
+            drawText(r, dim, Offset(tx, ty.coerceIn(0f, size.height - r.size.height)))
+        }
     }
 }
 

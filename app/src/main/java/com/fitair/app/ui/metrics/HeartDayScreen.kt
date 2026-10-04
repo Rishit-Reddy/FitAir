@@ -38,6 +38,12 @@ import com.fitair.app.ui.components.SectionBreak
 import com.fitair.app.ui.components.SectionHeader
 import com.fitair.app.ui.components.SelectionCard
 import com.fitair.app.ui.components.StatRow
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import com.fitair.app.ui.components.charts.zoneLine
+import com.fitair.app.ui.theme.LocalZoneColors
+import com.fitair.app.ui.theme.Shapes
 import com.fitair.app.ui.theme.Spacing
 import com.fitair.app.ui.theme.Type
 import java.time.Instant
@@ -87,26 +93,31 @@ fun HeartDayScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(Spacing.m))
             val sel = selected?.takeIf { it in ui.mean.indices && !ui.mean[it].isNaN() }
             val zone = { bpm: Double -> ZONE_NAMES[MetricStats.zoneIndex(bpm, ui.zoneBpm)] }
+            val zcol = LocalZoneColors.current
             if (sel != null) {
                 val m = ui.mean[sel]
                 SelectionCard(clockOfBin(sel), "Back to latest", { selected = null }) {
-                    Text("${Math.round(m)} bpm · ${zone(m.toDouble())}", style = MaterialTheme.typography.headlineMedium)
+                    ZoneReading(Math.round(m).toInt(), zone(m.toDouble()), zcol[MetricStats.zoneIndex(m.toDouble(), ui.zoneBpm)])
+                    Spacer(Modifier.height(Spacing.s))
                     if (!ui.lo[sel].isNaN() && !ui.hi[sel].isNaN())
                         Text("Between ${Math.round(ui.lo[sel])} and ${Math.round(ui.hi[sel])} in those five minutes", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 val at = ui.latestMs?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) }
                 SelectionCard(if (at != null) "Latest reading · ${Format.clock(at.hour, at.minute)}" else "Latest reading", null, null) {
-                    Text(ui.latestBpm?.let { "$it bpm · ${zone(it.toDouble())}" } ?: Format.DASH, style = MaterialTheme.typography.headlineMedium)
+                    if (ui.latestBpm != null) ZoneReading(ui.latestBpm, zone(ui.latestBpm.toDouble()), zcol[MetricStats.zoneIndex(ui.latestBpm.toDouble(), ui.zoneBpm)])
+                    else Text(Format.DASH, style = MaterialTheme.typography.headlineMedium)
+                    Spacer(Modifier.height(Spacing.s))
                     Text("Drag across the chart to read any time of day.", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            Spacer(Modifier.height(Spacing.m))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                StatTile("Resting", Math.round(ui.restingDay ?: ui.rest.toDouble()).toString(), Modifier.weight(1f))
+                StatTile("Average", ui.avg?.let { Math.round(it).toString() } ?: Format.DASH, Modifier.weight(1f))
+                StatTile("Highest", ui.max?.toString() ?: Format.DASH, Modifier.weight(1f))
+            }
             Spacer(Modifier.height(Spacing.s))
-            Text(
-                listOfNotNull("Resting ${Math.round(ui.restingDay ?: ui.rest.toDouble())}", ui.avg?.let { "average ${Math.round(it)}" }, ui.max?.let { "highest $it" })
-                    .joinToString(" · "),
-                style = Type.body,
-            )
             ui.coverage?.let {
                 val pct = Math.round(it * 100).toInt()
                 Text(if (it < 0.6) "Heart rate was recorded for about $pct% of the daytime, so this day is partial." else "Heart rate recorded for about $pct% of the daytime.",
@@ -119,7 +130,11 @@ fun HeartDayScreen(onBack: () -> Unit) {
             val zm = ui.zoneMin
             val names = ZONE_NAMES.drop(1)
             names.forEachIndexed { i, n ->
-                StatRow("$n · ${Math.round(ui.zoneBpm[i])}+ bpm", zm?.get(i)?.let { Format.hm(it.toLong()) } ?: Format.DASH)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(zcol[i + 1]))
+                    Spacer(Modifier.width(Spacing.s))
+                    StatRow("$n · ${Math.round(ui.zoneBpm[i])}+ bpm", zm?.get(i)?.let { Format.hm(it.toLong()) } ?: Format.DASH, Modifier.weight(1f))
+                }
             }
             Spacer(Modifier.height(Spacing.s))
             Text("Zones use a maximum heart rate of ${Math.round(ui.hrMax)} bpm (${ui.hrMaxSource}). You can change it in Settings.",
@@ -138,6 +153,7 @@ private fun HeartChart(ui: HeartDayUi, selected: Int?, onSelect: (Int) -> Unit, 
     val cs = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
     val select by rememberUpdatedState(onSelect)
+    val zc = LocalZoneColors.current
     val ink = cs.onSurface.copy(alpha = 0.8f); val dim = cs.onSurfaceVariant; val guide = cs.outlineVariant; val primary = cs.primary
     val cap = Type.caption.copy(letterSpacing = androidx.compose.ui.unit.TextUnit.Unspecified)
     val n = ui.mean.size
@@ -172,7 +188,7 @@ private fun HeartChart(ui: HeartDayUi, selected: Int?, onSelect: (Int) -> Unit, 
         val names = listOf("Light", "Mod.", "Vig.", "Peak")
         ui.zoneBpm.forEachIndexed { i, b ->
             if (b < lo || b > hi) return@forEachIndexed
-            drawLine(guide, Offset(left, y(b)), Offset(left + plotW, y(b)), 1.dp.toPx(), pathEffect = dots)
+            drawLine(zc[i + 1].copy(alpha = 0.55f), Offset(left, y(b)), Offset(left + plotW, y(b)), 1.dp.toPx(), pathEffect = dots)
             val r = measurer.measure("${names[i]} ${Math.round(b)}", cap)
             drawText(r, dim, Offset(left + plotW + 4.dp.toPx(), (y(b) - r.size.height / 2f).coerceIn(0f, size.height - r.size.height)))
         }
@@ -197,17 +213,8 @@ private fun HeartChart(ui: HeartDayUi, selected: Int?, onSelect: (Int) -> Unit, 
             }
             i = j + 1
         }
-        // mean line, broken at gaps
-        val stroke = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        i = 0
-        while (i < n) {
-            if (ui.mean[i].isNaN()) { i++; continue }
-            var j = i
-            while (j + 1 < n && !ui.mean[j + 1].isNaN()) j++
-            if (j == i) drawCircle(ink, 2.dp.toPx(), Offset(x(i), y(ui.mean[i])))
-            else { val p = Path(); p.moveTo(x(i), y(ui.mean[i])); for (k in i + 1..j) p.lineTo(x(k), y(ui.mean[k])); drawPath(p, ink, style = stroke) }
-            i = j + 1
-        }
+        // mean line, one colour per zone, broken at gaps
+        zoneLine(List(n) { x(it) }, ui.mean.map { if (it.isNaN()) null else y(it) }, ui.mean, ui.zoneBpm, zc, ink, 2.dp.toPx())
         // exercise sessions as ticks on the x axis (flagged ones dim)
         val z = ZoneId.systemDefault()
         val dayStart = ui.date.atStartOfDay(z).toInstant().toEpochMilli()
@@ -225,7 +232,7 @@ private fun HeartChart(ui: HeartDayUi, selected: Int?, onSelect: (Int) -> Unit, 
         // selection
         selected?.takeIf { it in 0 until n && !ui.mean[it].isNaN() }?.let { s ->
             drawLine(primary.copy(alpha = 0.5f), Offset(x(s), top), Offset(x(s), bottom), 1.dp.toPx())
-            drawCircle(primary, 4.dp.toPx(), Offset(x(s), y(ui.mean[s]))); drawCircle(cs.background, 1.8.dp.toPx(), Offset(x(s), y(ui.mean[s])))
+            drawCircle(zc[MetricStats.zoneIndex(ui.mean[s].toDouble(), ui.zoneBpm)], 4.dp.toPx(), Offset(x(s), y(ui.mean[s]))); drawCircle(cs.background, 1.8.dp.toPx(), Offset(x(s), y(ui.mean[s])))
         }
     }
 }
@@ -233,4 +240,27 @@ private fun HeartChart(ui: HeartDayUi, selected: Int?, onSelect: (Int) -> Unit, 
 private fun DrawScope.yText(m: TextMeasurer, style: androidx.compose.ui.text.TextStyle, text: String, color: Color, yCenter: Float, gutter: Float) {
     val r = m.measure(text, style)
     drawText(r, color, Offset(gutter - r.size.width - 6.dp.toPx(), (yCenter - r.size.height / 2f).coerceAtLeast(0f)))
+}
+
+/** Big number with its unit, then the zone name in the zone's colour. */
+@Composable
+private fun ZoneReading(bpm: Int, zone: String, color: Color) {
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(bpm.toString(), style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.width(Spacing.xs))
+        Text("bpm", style = Type.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+        Spacer(Modifier.width(Spacing.m))
+        Box(Modifier.padding(bottom = 8.dp).size(10.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(Spacing.xs))
+        Text(zone, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 2.dp))
+    }
+}
+
+@Composable
+private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier.clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.m, vertical = Spacing.m)) {
+        Text(label.uppercase(), style = Type.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(Spacing.xs))
+        Text(value, style = MaterialTheme.typography.headlineMedium)
+    }
 }

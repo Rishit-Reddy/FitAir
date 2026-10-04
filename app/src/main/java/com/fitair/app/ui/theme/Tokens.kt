@@ -101,6 +101,15 @@ val DarkStage = StageColors(awake = Color(0xFFF0A35C), light = Color(0xFF93CCF5)
 
 val LocalStageColors = staticCompositionLocalOf { LightStage }
 
+/** Heart-rate zone colours, index 0 = below Light (resting) .. 4 = Peak; used for the heart rate line, dots and zone rows only. */
+@Immutable
+class ZoneColors(val z: List<Color>) { operator fun get(i: Int) = z[i.coerceIn(0, z.lastIndex)] }
+
+val LightZone = ZoneColors(listOf(Color(0xFF7C8A99), Color(0xFF2F9E6B), Color(0xFFC29A12), Color(0xFFD9701F), Color(0xFFC63D3D)))
+val DarkZone = ZoneColors(listOf(Color(0xFF9AA7B5), Color(0xFF5CCB93), Color(0xFFE6C34D), Color(0xFFF0954F), Color(0xFFF2706B)))
+
+val LocalZoneColors = staticCompositionLocalOf { LightZone }
+
 /**
  * Chip colours as plain ARGB ints so contrast is unit-testable on the JVM. A status chip tints its container with the
  * status colour (16 % light, 24 % dark) over its surface; the text stays neutral ink (docs/PLAN_090 section 2).
