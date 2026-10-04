@@ -269,7 +269,7 @@ private fun MainContent(vm: MainViewModel) {
                 TodayDest.Steps -> DailyTotalScreen(MetricId.Steps, onBack = { dest = null })
                 TodayDest.Energy -> DailyTotalScreen(MetricId.Energy, onBack = { dest = null })
                 TodayDest.Distance -> DailyTotalScreen(MetricId.Distance, onBack = { dest = null })
-                TodayDest.Water -> DailyTotalScreen(MetricId.Water, onBack = { dest = null })
+                TodayDest.Water -> com.fitair.app.ui.water.WaterScreen(onBack = { dest = null })
                 TodayDest.Settings -> Column(Modifier.fillMaxSize()) {
                     DetailHeader("Settings", onBack = { dest = null })
                     Box(Modifier.weight(1f)) { SettingsScreen(vm) }
