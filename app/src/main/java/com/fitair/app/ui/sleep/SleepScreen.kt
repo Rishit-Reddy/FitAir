@@ -26,6 +26,7 @@ import com.fitair.app.ui.components.InlineError
 import com.fitair.app.ui.components.Page
 import com.fitair.app.ui.components.SectionBreak
 import com.fitair.app.ui.components.SectionHeader
+import com.fitair.app.ui.components.SectionCard
 import com.fitair.app.ui.components.ScoreBar
 import com.fitair.app.ui.components.SelectionCard
 import com.fitair.app.ui.components.StageBar
@@ -89,12 +90,12 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
             EmptyState("No sleep data for this range", "Pick a longer range.")
             return@Page
         }
-        Row(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l)) {
             Stat("Avg sleep", hm(SleepModel.avgSleepMin(nights)), Modifier.weight(1f))
             Stat("Average night score", SleepModel.avgScore(nights)?.let { "${Math.round(it)}" } ?: Format.DASH, Modifier.weight(1f))
             Stat("Short over 7 nights", SleepModel.latestDebtMin(nights)?.let { hm(it) } ?: Format.DASH, Modifier.weight(1f))
         }
-        Spacer(Modifier.height(Spacing.l))
+        Spacer(Modifier.height(Spacing.m))
 
         val labels = remember(nights) { nights.map { SleepModel.xLabel(it.date) } }
         val selIdx = nights.indexOfFirst { it.date == sel.date }.takeIf { it >= 0 }
@@ -104,22 +105,24 @@ private fun Content(vm: SleepVm, all: List<Night>, modifier: Modifier) {
         val scoreTones = remember(nights) { SleepModel.scoreTones(nights) }
         val barColors = barTones.map { if (it == Tone.Neutral) null else toneColor(it) }
         val pointColors = scoreTones.map { if (it == Tone.Neutral) null else toneColor(it) }
-        SectionHeader("Time asleep")
-        Spacer(Modifier.height(Spacing.s))
-        BarChart(
-            SleepModel.durationHours(nights), selectedIndex = selIdx, onSelect = pick,
-            baseline = need?.let { (it / 60.0).toFloat() }, xLabels = labels, barColors = barColors,
-        )
-        Text(
-            if (need != null) "Dashed line: your need, ${hm(need)}. Green meets it, amber is up to an hour short, red is more." else " ",
-            style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.xs),
-        )
+        SectionCard("Time asleep") {
+            BarChart(
+                SleepModel.durationHours(nights), selectedIndex = selIdx, onSelect = pick,
+                baseline = need?.let { (it / 60.0).toFloat() }, xLabels = labels, barColors = barColors,
+            )
+            Text(
+                if (need != null) "Dashed line: your need, ${hm(need)}. Green meets it, amber is up to an hour short, red is more." else " ",
+                style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.s),
+            )
+        }
         Spacer(Modifier.height(Spacing.m))
         SelectedNight(sel, vm.detailFor(sel.date), isDefault = sel.date == default, onBack = vm::selectDefault)
-        Spacer(Modifier.height(Spacing.l))
-        SectionHeader("Sleep score")
-        Spacer(Modifier.height(Spacing.s))
-        LineChart(SleepModel.scores(nights), selectedIndex = selIdx, onSelect = pick, xLabels = labels, pointColors = pointColors)
+        Spacer(Modifier.height(Spacing.m))
+        BedWakeCard(nights, vm.windows, selIdx, pick)
+        Spacer(Modifier.height(Spacing.m))
+        SectionCard("Sleep score") {
+            LineChart(SleepModel.scores(nights), selectedIndex = selIdx, onSelect = pick, xLabels = labels, pointColors = pointColors)
+        }
     }
 }
 
@@ -164,18 +167,30 @@ private fun Detail(n: Night, d: NightDetail?, onExplain: () -> Unit) {
         Text("No sleep recorded.", style = Type.bodySmall, color = dim)
         return
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(hm(n.sleepMin), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-        VerdictScore(n.score)
+    SectionCard(null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(hm(n.sleepMin), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            VerdictScore(n.score)
+        }
+        Spacer(Modifier.height(Spacing.s))
+        ScoreBar(n.score, SleepModel.tone(n.score), Modifier.fillMaxWidth())
+        if (d?.bedtime != null) Text("${d.bedtime} – ${d.wake}", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.s))
+        Spacer(Modifier.height(Spacing.l))
+        val st = d?.stages
+        if (st == null) {
+            Text(if (d == null) "Loading…" else "No stage data for this night.", style = Type.bodySmall, color = dim)
+        } else {
+            if (d.segments.isNotEmpty() && d.startMs != null && d.endMs != null) {
+                StageTimeline(d.segments, d.startMs, d.endMs)
+                Spacer(Modifier.height(Spacing.l))
+            }
+            StageBar(st.awake, st.light, st.rem, st.deep, height = 28.dp, legend = true)
+        }
     }
-    Spacer(Modifier.height(Spacing.s))
-    ScoreBar(n.score, SleepModel.tone(n.score), Modifier.fillMaxWidth())
-    if (d?.bedtime != null) Text("${d.bedtime} – ${d.wake}", style = Type.bodySmall, color = dim, modifier = Modifier.padding(top = Spacing.s))
-    Spacer(Modifier.height(Spacing.l))
-    val st = d?.stages
-    if (st == null) {
-        Text(if (d == null) "Loading…" else "No stage data for this night.", style = Type.bodySmall, color = dim)
-    } else StageBar(st.awake, st.light, st.rem, st.deep, height = 32.dp, legend = true)
+    if (d?.startMs != null) {
+        Spacer(Modifier.height(Spacing.m))
+        SleepHeartCard(d)
+    }
 
     Spacer(Modifier.height(Spacing.l))
     Row(verticalAlignment = Alignment.CenterVertically) {

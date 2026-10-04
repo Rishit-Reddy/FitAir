@@ -38,15 +38,9 @@ internal val ZONE_ROW_NAMES = listOf("Light", "Moderate", "Vigorous", "Peak")
 
 private fun clockOf(ms: Long): String = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).let { Format.clock(it.hour, it.minute) }
 
-/** A titled section card in the page's card style (surface variant, 12 dp corners, 16 dp padding). */
 @Composable
-internal fun HeartCard(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.fillMaxWidth().clip(Shapes.card).background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.l)) {
-        SectionHeader(title)
-        Spacer(Modifier.height(Spacing.m))
-        content()
-    }
-}
+internal fun HeartCard(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) =
+    com.fitair.app.ui.components.SectionCard(title, modifier, content)
 
 /** Small number tile: caption, value, optional dim line under it. */
 @Composable

@@ -53,7 +53,13 @@ class ComponentCard(
     val score: Double?, val tone: Tone,
 )
 
-class NightDetail(val bedtime: String?, val wake: String?, val stages: StageMinutes?)
+class NightDetail(
+    val bedtime: String?, val wake: String?, val stages: StageMinutes?,
+    val startMs: Long? = null, val endMs: Long? = null, val segments: List<StageSeg> = emptyList(),
+    /** Five-minute heart rate means from [startMs] (NaN = gap), only as many bins as the night is long. */
+    val hr: FloatArray? = null, val hrLow: Int? = null, val hrLowMs: Long? = null, val hrAvg: Int? = null,
+    val hrvMs: Double? = null, val breathsPerMin: Double? = null,
+)
 
 /** Pure helpers (JVM-testable). */
 object SleepModel {
@@ -173,6 +179,8 @@ class SleepVm(app: Application) : AndroidViewModel(app) {
     var state by mutableStateOf<SleepState>(SleepState.Loading); private set
     var range by mutableStateOf(30); private set
     var selected by mutableStateOf<LocalDate?>(null); private set
+    /** Bed and wake (start, end ms) of the main sleep of each of the last 30 nights. */
+    var windows by mutableStateOf<Map<LocalDate, LongArray>>(emptyMap()); private set
 
     /** Snapshot-backed cache so the top block (default night) and the selection card never overwrite each other. */
     private val details = mutableStateMapOf<LocalDate, NightDetail>()
@@ -202,6 +210,7 @@ class SleepVm(app: Application) : AndroidViewModel(app) {
                 val nights = withContext(Dispatchers.IO) {
                     SleepModel.parseNights(LocalApi.get(getApplication(), "/daily?from=$from&to=$to"), from, to)
                 }
+                windows = withContext(Dispatchers.IO) { try { queryWindows(from, to) } catch (e: Exception) { AppLog.e("Sleep windows failed", e); emptyMap() } }
                 state = SleepState.Ready(nights)
                 SleepModel.defaultNight(nights)?.let { ensureDetail(it) }
                 if (selected == null || nights.none { it.date == selected }) selectDefault()
@@ -237,10 +246,46 @@ class SleepVm(app: Application) : AndroidViewModel(app) {
             arrayOf(lo.toString(), hi.toString())).use { if (it.moveToFirst()) { start = it.getLong(0); end = it.getLong(1); origin = it.getString(2) } }
         if (origin == null) return NightDetail(null, null, null)
         val by = HashMap<Int, Double>()
-        db.rawQuery("SELECT stage, sum(end_ms-start_ms)/60000.0 FROM sleep_stage WHERE sleep_start_ms=? AND origin=? GROUP BY stage",
-            arrayOf(start.toString(), origin)).use { while (it.moveToNext()) by[it.getInt(0)] = it.getDouble(1) }
+        val segs = ArrayList<StageSeg>()
+        db.rawQuery("SELECT start_ms, end_ms, stage FROM sleep_stage WHERE sleep_start_ms=? AND origin=? ORDER BY start_ms",
+            arrayOf(start.toString(), origin)).use {
+            while (it.moveToNext()) {
+                val a0 = it.getLong(0); val b0 = it.getLong(1); val stg = it.getInt(2)
+                by[stg] = (by[stg] ?: 0.0) + (b0 - a0) / 60000.0
+                SleepTiming.lane(stg)?.let { l -> segs.add(StageSeg(a0, b0, l)) }
+            }
+        }
+        val rows = ArrayList<com.fitair.app.data.metrics.MetricStats.HrRow>()
+        db.rawQuery("SELECT t30, mean, \"min\", \"max\", n FROM hr_30s WHERE t30>=? AND t30<? ORDER BY t30", arrayOf(start.toString(), end.toString()))
+            .use { while (it.moveToNext()) rows.add(com.fitair.app.data.metrics.MetricStats.HrRow(it.getLong(0), it.getDouble(1), it.getInt(2), it.getInt(3), it.getInt(4))) }
+        val bins = ((end - start) / com.fitair.app.data.metrics.MetricStats.BIN_MS).toInt().coerceIn(1, com.fitair.app.data.metrics.MetricStats.BINS)
+        val hr = if (rows.isEmpty()) null else com.fitair.app.data.metrics.MetricStats.downsample(rows, start).mean.copyOf(bins)
+        val low = com.fitair.app.data.metrics.HeartExtras.overnightLow(rows, listOf(longArrayOf(start, end)))
+        val n = rows.sumOf { it.n }
+        fun avgOf(sql: String): Double? = db.rawQuery(sql, arrayOf(start.toString(), end.toString())).use { if (it.moveToFirst() && !it.isNull(0)) it.getDouble(0) else null }
+        val hrv = try { avgOf("SELECT avg(rmssd) FROM hrv WHERE t>=? AND t<=?") } catch (e: Exception) { null }
+        val resp = try { avgOf("SELECT avg(rate) FROM respiratory_rate WHERE t>=? AND t<=?") } catch (e: Exception) { null }
         fun clock(ms: Long) = Instant.ofEpochMilli(ms).atZone(z).let { com.fitair.app.core.Format.clock(it.hour, it.minute) }
         val st = SleepModel.stageMinutes(by)
-        return NightDetail(clock(start), clock(end), st.takeIf { !it.isEmpty })
+        return NightDetail(
+            clock(start), clock(end), st.takeIf { !it.isEmpty }, start, end, segs,
+            hr, low?.bpm, low?.atMs, if (n > 0) Math.round(rows.sumOf { it.mean * it.n } / n).toInt() else null, hrv, resp,
+        )
+    }
+
+    /** Longest sleep ending on each date in [from, to] (the same night rule as [queryDetail]). */
+    private fun queryWindows(from: LocalDate, to: LocalDate): Map<LocalDate, LongArray> {
+        val z = ZoneId.systemDefault()
+        val (lo, _) = LocalApi.bounds(from, z); val (_, hi) = LocalApi.bounds(to, z)
+        val out = HashMap<LocalDate, LongArray>()
+        LocalStore.get(getApplication()).db.rawQuery("SELECT start_ms, end_ms FROM sleep WHERE end_ms>=? AND end_ms<?", arrayOf(lo.toString(), hi.toString())).use {
+            while (it.moveToNext()) {
+                val a = it.getLong(0); val b = it.getLong(1)
+                val d = Instant.ofEpochMilli(b).atZone(z).toLocalDate()
+                val cur = out[d]
+                if (cur == null || b - a > cur[1] - cur[0]) out[d] = longArrayOf(a, b)
+            }
+        }
+        return out
     }
 }
