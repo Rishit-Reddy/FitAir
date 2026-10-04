@@ -40,11 +40,15 @@ import kotlin.concurrent.thread
  * notification, then schedules the next alarm. Rescheduled on boot, time/zone change, app update, every logged drink and every sync.
  */
 object WaterAlarm {
-    const val CHANNEL = "water"
+    /** High-importance channel (heads-up and full-screen); the old "water" channel was default importance and cannot be raised. */
+    const val CHANNEL = "water_alert"
+    private const val OLD_CHANNEL = "water"
+    const val SNOOZE_MIN = 15
     const val NOTIF_ID = 7101
     const val ACTION_FIRE = "com.fitair.app.WATER_FIRE"
     const val ACTION_ADD = "com.fitair.app.WATER_ADD"
     const val ACTION_UNDO = "com.fitair.app.WATER_UNDO"
+    const val ACTION_SNOOZE = "com.fitair.app.WATER_SNOOZE"
     private const val K_LAST_REMINDER = "water_last_reminder_ms"
     private const val K_UNANSWERED = "water_unanswered"
     private const val K_PENDING_DELETE = "water_hc_pending_delete"
@@ -74,11 +78,13 @@ object WaterAlarm {
 
     private fun ensureChannel(ctx: Context) {
         if (Build.VERSION.SDK_INT < 26) return
-        val ch = NotificationChannel(CHANNEL, "Water reminders", NotificationManager.IMPORTANCE_DEFAULT)
-        ch.description = "Gentle drink reminders in your waking hours"
+        val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+        try { nm.deleteNotificationChannel(OLD_CHANNEL) } catch (e: Exception) { }
+        val ch = NotificationChannel(CHANNEL, "Water reminders", NotificationManager.IMPORTANCE_HIGH)
+        ch.description = "Drink reminders in your waking hours, full screen when the phone is locked"
         ch.setSound(null, null)
-        ch.enableVibration(true); ch.vibrationPattern = longArrayOf(0, 150)
-        ctx.getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
+        ch.enableVibration(true); ch.vibrationPattern = longArrayOf(0, 250, 120, 250)
+        nm.createNotificationChannel(ch)
     }
 
     private fun receiverIntent(ctx: Context, action: String, data: String? = null): Intent =
@@ -191,6 +197,22 @@ object WaterAlarm {
         return PendingIntent.getActivity(ctx, 2, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
+    private fun reminderIntent(ctx: Context): PendingIntent = PendingIntent.getActivity(
+        ctx, 3, Intent(ctx, WaterReminderActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    /** Android 14+ lets the user withhold full-screen notifications; older versions grant it with the manifest entry. */
+    fun canFullScreen(ctx: Context): Boolean =
+        Build.VERSION.SDK_INT < 34 || (ctx.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() ?: false)
+
+    /** Moves the next reminder [SNOOZE_MIN] minutes ahead and removes the current one. */
+    fun snooze(ctx: Context) {
+        val app = ctx.applicationContext
+        try { NotificationManagerCompat.from(app).cancel(NOTIF_ID) } catch (e: Exception) { }
+        scheduleAt(app, System.currentTimeMillis() + SNOOZE_MIN * WaterSchedule.MIN)
+    }
+
     private fun actionPi(ctx: Context, code: Int, action: String, data: String) =
         PendingIntent.getBroadcast(ctx, code, receiverIntent(ctx, action, data), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
@@ -199,14 +221,13 @@ object WaterAlarm {
     private fun post(ctx: Context, text: String, undoT: Long? = null) {
         if (!canNotify(ctx)) return
         ensureChannel(ctx)
-        val glass = WaterDao.glassMl(ctx)
         val b = NotificationCompat.Builder(ctx, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Water").setContentText(text)
-            .setContentIntent(contentIntent(ctx)).setAutoCancel(false).setOnlyAlertOnce(undoT != null)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Time for water").setContentText(text)
+            .setContentIntent(if (undoT == null) reminderIntent(ctx) else contentIntent(ctx)).setAutoCancel(true).setOnlyAlertOnce(undoT != null)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(if (undoT == null) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_LOW)
         if (undoT == null) {
-            b.addAction(0, "+$glass ml", actionPi(ctx, 10, ACTION_ADD, "fitair://water/add/$glass"))
-            b.addAction(0, "+500 ml", actionPi(ctx, 11, ACTION_ADD, "fitair://water/add/500"))
+            WaterDao.AMOUNTS.forEachIndexed { i, a -> b.addAction(0, "$a ml", actionPi(ctx, 10 + i, ACTION_ADD, "fitair://water/add/$a")) }
+            if (WaterDao.fullScreenOn(ctx) && canFullScreen(ctx)) b.setFullScreenIntent(reminderIntent(ctx), true)
         } else {
             b.addAction(0, "Undo", actionPi(ctx, 12, ACTION_UNDO, "fitair://water/undo/$undoT"))
             b.setTimeoutAfter(10_000)
@@ -250,7 +271,7 @@ object WaterAlarm {
             .any { !it.allDay && it.busy && it.begin.toEpochMilli() <= now && now < it.end.toEpochMilli() }
     } catch (e: Exception) { false }
 
-    /** A "+250 ml" / "+500 ml" notification action. */
+    /** A "200 ml" / "300 ml" / "500 ml" notification action. */
     fun logFromNotification(ctx: Context, ml: Int) {
         val app = ctx.applicationContext
         val t = WaterDao.add(app, ml)
@@ -275,8 +296,9 @@ class WaterReceiver : android.content.BroadcastReceiver() {
                 AppLog.init(app)
                 when (intent.action) {
                     WaterAlarm.ACTION_FIRE -> WaterAlarm.fire(app)
-                    WaterAlarm.ACTION_ADD -> WaterAlarm.logFromNotification(app, intent.data?.lastPathSegment?.toIntOrNull() ?: 250)
+                    WaterAlarm.ACTION_ADD -> WaterAlarm.logFromNotification(app, intent.data?.lastPathSegment?.toIntOrNull() ?: WaterDao.AMOUNTS.first())
                     WaterAlarm.ACTION_UNDO -> intent.data?.lastPathSegment?.toLongOrNull()?.let { WaterAlarm.undoFromNotification(app, it) }
+                    WaterAlarm.ACTION_SNOOZE -> WaterAlarm.snooze(app)
                     else -> WaterAlarm.reschedule(app)  // boot, time/zone change, app update
                 }
             } catch (e: Throwable) {

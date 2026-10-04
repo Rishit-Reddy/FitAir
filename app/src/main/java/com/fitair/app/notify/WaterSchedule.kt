@@ -12,7 +12,6 @@ object WaterSchedule {
     const val MIN = 60_000L
     const val DEFAULT_INTERVAL = 90
     const val DEFAULT_GOAL_ML = 2500
-    const val DEFAULT_GLASS_ML = 250
     const val BEHIND_ML = 500
     const val BEHIND_INTERVAL = 60
     const val ACTIVE_BONUS_ML = 500

@@ -22,13 +22,16 @@ object WaterDao {
     const val PREF_ON = "water_on"
     const val PREF_INTERVAL = "water_interval_min"
     const val PREF_GOAL = "water_goal_ml"
-    const val PREF_GLASS = "water_glass_ml"
     const val PREF_QUIET = "water_quiet_events"
+    const val PREF_FULLSCREEN = "water_fullscreen"
+
+    /** The three amounts offered everywhere: Today card, notification buttons and the full-screen reminder. */
+    val AMOUNTS = listOf(200, 300, 500)
 
     fun remindersOn(ctx: Context) = PrefDao.bool(ctx, PREF_ON, false)
+    fun fullScreenOn(ctx: Context) = PrefDao.bool(ctx, PREF_FULLSCREEN, true)
     fun intervalMin(ctx: Context) = WaterSchedule.clampInterval(PrefDao.int(ctx, PREF_INTERVAL, WaterSchedule.DEFAULT_INTERVAL))
     fun baseGoalMl(ctx: Context) = WaterSchedule.clampGoal(PrefDao.int(ctx, PREF_GOAL, WaterSchedule.DEFAULT_GOAL_ML))
-    fun glassMl(ctx: Context) = PrefDao.int(ctx, PREF_GLASS, WaterSchedule.DEFAULT_GLASS_ML).coerceIn(100, 1000)
 
     private fun dayBounds(date: LocalDate, z: ZoneId) = LocalApi.bounds(date, z)
 

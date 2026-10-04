@@ -250,7 +250,7 @@ private fun AlertLine(i: Insight) {
 private fun WaterBlock(ui: TodayUi, mode: Mode, vm: TodayVm, onEnableReminders: () -> Unit) {
     val w = ui.water ?: return
     WaterCard(
-        w.ml, w.goalMl, w.extraMl, w.pace, ui.glassMl, vm.logged?.ml,
+        w.ml, w.goalMl, w.extraMl, w.pace, vm.logged?.ml,
         onAdd = vm::addWater, onUndo = vm::undoWater, remindersOn = w.remindersOn, onEnableReminders = onEnableReminders,
     )
 }

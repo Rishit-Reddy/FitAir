@@ -111,11 +111,11 @@ fun NextUpStrip(
 
 /**
  * Water as one slim strip: "Water 1.25 of 2.5 L", a neutral-ink bar (never tier colour, never red), the pace words and the
- * quick-add buttons. [loggedMl] shows "Logged 250 ml" with Undo for 10 s.
+ * quick-add buttons (200 / 300 / 500 ml). [loggedMl] shows "Logged 250 ml" with Undo for 10 s.
  */
 @Composable
 fun WaterCard(
-    ml: Int, goalMl: Int, extraMl: Int, pace: Pace, glassMl: Int, loggedMl: Int?,
+    ml: Int, goalMl: Int, extraMl: Int, pace: Pace, loggedMl: Int?,
     onAdd: (Int) -> Unit, onUndo: () -> Unit, remindersOn: Boolean, onEnableReminders: (() -> Unit)?, modifier: Modifier = Modifier,
 ) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -140,8 +140,9 @@ fun WaterCard(
             if (loggedMl != null) {
                 TextButton(onClick = onUndo, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Undo", style = Type.label) }
             } else {
-                TextButton(onClick = { onAdd(glassMl) }, modifier = Modifier.heightIn(min = Spacing.minTouch), contentPadding = PaddingValues(horizontal = 10.dp)) { Text("+ glass", style = Type.label) }
-                TextButton(onClick = { onAdd(500) }, modifier = Modifier.heightIn(min = Spacing.minTouch), contentPadding = PaddingValues(horizontal = 10.dp)) { Text("+500", style = Type.label) }
+                com.fitair.app.data.dao.WaterDao.AMOUNTS.forEach { a ->
+                    TextButton(onClick = { onAdd(a) }, modifier = Modifier.heightIn(min = Spacing.minTouch), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("+$a", style = Type.label) }
+                }
             }
         }
         if (!remindersOn && onEnableReminders != null && loggedMl == null) {

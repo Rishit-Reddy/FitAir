@@ -34,7 +34,16 @@ fun WaterSection() {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
     var on by remember { mutableStateOf(WaterDao.remindersOn(ctx)) }
     var interval by remember { mutableIntStateOf(WaterDao.intervalMin(ctx)) }
-    var glass by remember { mutableIntStateOf(WaterDao.glassMl(ctx)) }
+    var fullScreen by remember { mutableStateOf(WaterDao.fullScreenOn(ctx)) }
+    // re-checked on every return to Settings, since the grant lives in a system screen
+    var fsAllowed by remember { mutableStateOf(WaterAlarm.canFullScreen(ctx)) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) fsAllowed = WaterAlarm.canFullScreen(ctx) }
+        lifecycle.lifecycle.addObserver(obs)
+        onDispose { lifecycle.lifecycle.removeObserver(obs) }
+    }
+    val activityCtx = LocalContext.current
     var goal by remember { mutableIntStateOf(WaterDao.baseGoalMl(ctx)) }
     var quiet by remember { mutableStateOf(PrefDao.bool(ctx, WaterDao.PREF_QUIET, false)) }
     var denied by remember { mutableStateOf(false) }
@@ -64,14 +73,30 @@ fun WaterSection() {
     }
     if (denied) Text("Notifications are off for FitAir, so reminders cannot show. Allow them in the system settings and try again.",
         style = Type.bodySmall, color = dim)
-    Text("A nudge every ${interval} min between 30 min after you wake and 1 h before your usual bedtime, with +$glass ml and +500 ml buttons. " +
+    Text("A nudge every ${interval} min between 30 min after you wake and 1 h before your usual bedtime, with 200, 300 and 500 ml buttons. " +
         "It only knows what you tap; the band cannot see drinking.", style = Type.bodySmall, color = dim)
 
     Spacer(Modifier.height(Spacing.m))
     Text("Every", style = Type.label, color = dim)
     ChipRow(listOf(45, 60, 90, 120, 150, 180), interval, { "$it min" }) { interval = it; PrefDao.set(ctx, WaterDao.PREF_INTERVAL, it.toString()); resched() }
-    Text("Glass", style = Type.label, color = dim)
-    ChipRow(listOf(150, 200, 250, 330, 500), glass, { "$it ml" }) { glass = it; PrefDao.set(ctx, WaterDao.PREF_GLASS, it.toString()) }
+    Row(Modifier.fillMaxWidth().heightIn(min = Spacing.minTouch), verticalAlignment = Alignment.CenterVertically) {
+        Text("Full-screen reminder", style = Type.body, modifier = Modifier.weight(1f))
+        Switch(checked = fullScreen, onCheckedChange = { fullScreen = it; PrefDao.setBool(ctx, WaterDao.PREF_FULLSCREEN, it) })
+    }
+    Text("When the phone is locked or the screen is off, the reminder fills the screen with 200, 300 and 500 ml, Snooze and Skip. " +
+        "While you use the phone, Android shows a banner instead; tap it for the same screen.", style = Type.bodySmall, color = dim)
+    if (fullScreen && !fsAllowed && Build.VERSION.SDK_INT >= 34) {
+        Row(Modifier.fillMaxWidth().heightIn(min = Spacing.minTouch), verticalAlignment = Alignment.CenterVertically) {
+            Text("Android has full-screen reminders off for FitAir.", style = Type.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+            TextButton(onClick = {
+                runCatching {
+                    activityCtx.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        android.net.Uri.parse("package:${ctx.packageName}")))
+                }
+            }) { Text("Allow", style = Type.label) }
+        }
+    }
+    Spacer(Modifier.height(Spacing.s))
     Text("Daily goal (+0.5 L on a hard day)", style = Type.label, color = dim)
     ChipRow(listOf(1500, 2000, 2500, 3000, 3500, 4000), goal, { String.format(Locale.US, "%.1f L", it / 1000.0) }) {
         goal = WaterSchedule.clampGoal(it); PrefDao.set(ctx, WaterDao.PREF_GOAL, goal.toString()); resched()

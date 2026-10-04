@@ -88,7 +88,6 @@ data class TodayUi(
     val snapshot: MetricSnapshot? = null,
     /** Today's fact grid for the Details sheet. */
     val facts: DayFacts? = null,
-    val glassMl: Int = 250,
 )
 
 /** The drink just logged, for the 10 s "Logged 250 ml · Undo" line. */
@@ -273,7 +272,7 @@ class TodayVm(app: Application) : AndroidViewModel(app) {
         return TodayUi(
             date = today, readiness = readiness, lastSyncMs = prefs.getLong(SyncPrefs.LAST, 0L),
             insights = insights(row), hasData = row != null, wake = wake, water = WaterDao.today(ctx), dataToMs = dataTo,
-            snapshot = snap, facts = runCatching { DaySummary.facts(ctx, today) }.getOrNull(), glassMl = WaterDao.glassMl(ctx),
+            snapshot = snap, facts = runCatching { DaySummary.facts(ctx, today) }.getOrNull(),
         )
     }
 
