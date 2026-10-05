@@ -73,6 +73,7 @@ class MetricSnapshot(
     val water: WaterToday? = null,
     /** (time ms, kg) of the last 90 days, oldest first. */
     val weight: List<Pair<Long, Double>> = emptyList(),
+    val heightCm: Double? = null,
     val windDown: WindDown? = null,
 )
 
@@ -191,7 +192,7 @@ object MetricsRepo {
             rhrBand = MetricStats.band(rhrHist), hrvBand = MetricStats.band(hrvHist), bandDays = bandDays,
             nights = nights, lastStages = stages, debtMin = debt, loadToday = loadToday, loadHourly = loadHourly,
             typicalHourly = typical, ratio = ratio, loadUsual = usual, heart = heart,
-            water = if (isToday) WaterDao.today(ctx) else null, weight = weight(ctx, nowMs),
+            water = if (isToday) WaterDao.today(ctx) else null, weight = weight(ctx, nowMs), heightCm = com.fitair.app.data.Body.heightCm(ctx),
             windDown = if (isToday) windDown(wake.usualWakeMin, need, debt) else null,
         )
     }

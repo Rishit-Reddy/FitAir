@@ -216,7 +216,7 @@ object MetricCards {
                 build(
                     v?.let { String.format(Locale.US, "%.1f", it) }, "kg", v?.let { String.format(Locale.US, "%.1f kilograms", it) }, w.map { it.second },
                     Mini.Spark(avg), if (v != null && first != null && since != null) Copy.chipWeight(v - first.second, since) else null,
-                    hasWeekdays = false,
+                    sub = com.fitair.app.data.Body.bmi(v, s.heightCm)?.let { "BMI ${com.fitair.app.data.Body.fmt(it)}" }, hasWeekdays = false,
                 )
             }
             MetricId.Bedtime -> {
