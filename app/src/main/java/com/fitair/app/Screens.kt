@@ -79,10 +79,10 @@ fun LoadingScreen() {
     }
 }
 
-// ---------- Log ----------
+// ---------- Pickleball (opened from More, or from the running-timer card on Today) ----------
 
 @Composable
-fun LogScreen(vm: MainViewModel) {
+fun PickleballScreen(vm: MainViewModel, onBack: () -> Unit) {
     val start = vm.sessionStart
     val end = vm.sessionEnd
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -96,11 +96,9 @@ fun LogScreen(vm: MainViewModel) {
     var kcal by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
 
-    Page {
-        com.fitair.app.ui.weight.WeightEntry()
-        Spacer(Modifier.height(16.dp))
-        Hairline()
-        Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxSize()) {
+    com.fitair.app.ui.components.DetailHeader("Pickleball", onBack)
+    Page(Modifier.weight(1f)) {
         Caption("Pickleball")
         val elapsed = when {
             start == null -> 0L
@@ -160,5 +158,6 @@ fun LogScreen(vm: MainViewModel) {
             Spacer(Modifier.height(16.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
     }
 }

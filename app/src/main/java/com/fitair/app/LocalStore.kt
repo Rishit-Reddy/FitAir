@@ -14,10 +14,10 @@ class LocalStore private constructor(private val ctx: Context) :
 
     companion object {
         const val FILE = "fitair.db"
-        const val VERSION = 6
+        const val VERSION = 7
         /** Tables added in schema v3 (not part of the sync/backup health tables in [TABLES]). */
         val APP_TABLES = listOf("cal_event", "task", "checkin", "plan_item", "pref", "ai_call", "chat_msg",
-            "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary", "day_brief")
+            "load_day", "exercise_flag", "weight", "chat_session", "chat_turn", "water", "day_summary", "day_brief", "routine_log")
         val TABLES = listOf(
             "heart_rate", "steps", "distance", "total_calories", "resting_hr",
             "hrv", "respiratory_rate", "sleep", "sleep_stage", "exercise",
@@ -66,6 +66,7 @@ class LocalStore private constructor(private val ctx: Context) :
         createV4(db)
         createV5(db)
         createV6(db)
+        createV7(db)
         // fresh install: nothing to migrate
         db.execSQL("INSERT OR REPLACE INTO meta(k,v) VALUES('$MIG_DONE','1')")
     }
@@ -140,6 +141,11 @@ class LocalStore private constructor(private val ctx: Context) :
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_cal_feed_event_begin ON cal_feed_event(begin_ms)")
     }
 
+    /** Schema v7: the hair routine check-off log, one row per day and slot (am, pm). Additive only. */
+    private fun createV7(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS routine_log(date TEXT NOT NULL, slot TEXT NOT NULL, status TEXT NOT NULL, t INTEGER NOT NULL, PRIMARY KEY(date, slot))")
+    }
+
     /** Cheap schema-only upgrade; the heavy heart-rate rebuild runs later in [migrateHeartRate] (IO thread). */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createV2(db)
@@ -147,6 +153,7 @@ class LocalStore private constructor(private val ctx: Context) :
         if (oldVersion < 4) createV4(db)
         if (oldVersion < 5) createV5(db)
         if (oldVersion < 6) createV6(db)
+        if (oldVersion < 7) createV7(db)
         // never drop anything here
     }
 

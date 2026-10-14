@@ -238,13 +238,13 @@ private class TabSpec(val label: String, val off: androidx.compose.ui.graphics.v
 
 @Composable
 private fun MainContent(vm: MainViewModel) {
-    // Today · Metrics · Calendar · Coach · Log. Settings is behind the gear on Today.
+    // Today · Metrics · Calendar · Coach · More. Settings is behind the gear on Today and in More.
     val tabs = listOf(
         TabSpec("Today", NavIcons.TodayOutline, NavIcons.TodayFilled),
         TabSpec("Metrics", NavIcons.MetricsOutline, NavIcons.MetricsFilled),
         TabSpec("Calendar", NavIcons.CalendarOutline, NavIcons.CalendarFilled),
         TabSpec("Coach", NavIcons.CoachOutline, NavIcons.CoachFilled),
-        TabSpec("Log", NavIcons.LogOutline, NavIcons.LogFilled),
+        TabSpec("More", NavIcons.MoreOutline, NavIcons.MoreFilled),
     )
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val todayVm: TodayVm = viewModel()
@@ -270,6 +270,9 @@ private fun MainContent(vm: MainViewModel) {
                 TodayDest.Energy -> DailyTotalScreen(MetricId.Energy, onBack = { dest = null })
                 TodayDest.Distance -> DailyTotalScreen(MetricId.Distance, onBack = { dest = null })
                 TodayDest.Water -> com.fitair.app.ui.water.WaterScreen(onBack = { dest = null })
+                TodayDest.Hair -> com.fitair.app.ui.hair.HairScreen(onBack = { dest = null })
+                TodayDest.Weight -> com.fitair.app.ui.weight.WeightScreen(onBack = { dest = null })
+                TodayDest.Pickleball -> PickleballScreen(vm, onBack = { dest = null })
                 TodayDest.Settings -> Column(Modifier.fillMaxSize()) {
                     DetailHeader("Settings", onBack = { dest = null })
                     Box(Modifier.weight(1f)) { SettingsScreen(vm) }
@@ -304,12 +307,13 @@ private fun MainContent(vm: MainViewModel) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
-                0 -> TodayScreen(todayVm, onOpen = { if (it == TodayDest.Agenda) tab = 2 else dest = it }, scroll = todayScroll, onOpenCalendar = { tab = 2 })
+                0 -> TodayScreen(todayVm, onOpen = { if (it == TodayDest.Agenda) tab = 2 else dest = it }, scroll = todayScroll, onOpenCalendar = { tab = 2 },
+                    timerStartMs = vm.sessionStart.takeIf { vm.sessionEnd == null }, onStopTimer = { vm.stopSession() })
                 // a detail opened from here returns here: `tab` is not touched while `dest` is open
                 1 -> MetricsScreen(onOpen = { id -> destFor(id)?.let { dest = it } }, gridState = metricsGrid)
                 2 -> AgendaScreen(onBack = null, onOpenSettings = { dest = TodayDest.Settings })
                 3 -> CoachScreen(coachVm)
-                else -> LogScreen(vm)
+                else -> com.fitair.app.ui.more.MoreScreen(onOpen = { dest = it })
             }
         }
     }

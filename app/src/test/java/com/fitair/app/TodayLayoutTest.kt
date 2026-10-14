@@ -58,7 +58,7 @@ class TodayLayoutTest {
         assertEquals(TodayDest.Heart, destFor(Heart)); assertEquals(TodayDest.Readiness, destFor(Readiness))
         assertEquals(TodayDest.Sleep, destFor(Sleep)); assertEquals(TodayDest.Sleep, destFor(Bedtime))
         assertEquals(TodayDest.Steps, destFor(Steps)); assertEquals(TodayDest.Water, destFor(Water))
-        assertNull(destFor(Weight))
-        MetricId.values().filter { it != Weight }.forEach { assertNotNull(it.name, destFor(it)) }
+        assertEquals(TodayDest.Weight, destFor(Weight))
+        MetricId.values().forEach { assertNotNull(it.name, destFor(it)) }
     }
 }

@@ -53,6 +53,14 @@ object NavIcons {
         }
     }
 
+    // ---- More: three dots (outlined when unselected, larger and solid when selected) ---------------------
+
+    private fun ImageVector.Builder.dots(r: Float) {
+        for (cx in listOf(5f, 12f, 19f)) solid { moveTo(cx - r, 12f); arcToRelative(r, r, 0f, true, true, 2 * r, 0f); arcToRelative(r, r, 0f, true, true, -2 * r, 0f); close() }
+    }
+    val MoreOutline: ImageVector by lazy { icon("more_outline") { dots(1.7f) } }
+    val MoreFilled: ImageVector by lazy { icon("more_filled") { dots(2.4f) } }
+
     // ---- Calendar: page with two rings ------------------------------------------------------------------
 
     private fun ImageVector.Builder.rings() = line { moveTo(8f, 3f); lineTo(8f, 6f); moveTo(16f, 3f); lineTo(16f, 6f) }

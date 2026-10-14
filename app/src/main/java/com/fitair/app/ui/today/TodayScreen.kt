@@ -66,14 +66,14 @@ import java.util.Locale
 private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())
 
 /** Screens opened from Today, the gear and the Metrics tab. Agenda means "switch to the Calendar tab". */
-enum class TodayDest { Agenda, Sleep, Readiness, Hrv, RestingHr, Load, Settings, Heart, Steps, Energy, Distance, Water }
+enum class TodayDest { Agenda, Sleep, Readiness, Hrv, RestingHr, Load, Settings, Heart, Steps, Energy, Distance, Water, Hair, Weight, Pickleball }
 
 /** The detail screen a metric card opens; null where there is none yet (Weight arrives in 0.9.1). Bedtime opens Sleep. */
 fun destFor(id: MetricId): TodayDest? = when (id) {
     MetricId.Heart -> TodayDest.Heart; MetricId.Readiness -> TodayDest.Readiness; MetricId.Sleep, MetricId.Bedtime -> TodayDest.Sleep
     MetricId.RestingHr -> TodayDest.RestingHr; MetricId.Hrv -> TodayDest.Hrv; MetricId.Load -> TodayDest.Load
     MetricId.Energy -> TodayDest.Energy; MetricId.Distance -> TodayDest.Distance; MetricId.Steps -> TodayDest.Steps
-    MetricId.Water -> TodayDest.Water; MetricId.Weight -> null
+    MetricId.Water -> TodayDest.Water; MetricId.Weight -> TodayDest.Weight
 }
 
 private val WIDE = 600.dp
@@ -90,6 +90,7 @@ private val MIN_FIXED_H = 640.dp
 @Composable
 fun TodayScreen(
     vm: TodayVm, onOpen: (TodayDest) -> Unit = {}, scroll: ScrollState = rememberScrollState(), onOpenCalendar: () -> Unit = {},
+    timerStartMs: Long? = null, onStopTimer: () -> Unit = {},
 ) {
     val ui = vm.ui
     val mode = vm.mode
@@ -191,6 +192,10 @@ fun TodayScreen(
                     if (Build.VERSION.SDK_INT >= 33) notif.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.enableWaterReminders()
                 }) }
             }
+            // things that need an answer (a due hair dose, yesterday's unanswered one, a running pickleball timer); empty otherwise
+            val routine: @Composable () -> Unit = {
+                com.fitair.app.ui.hair.RoutineCards(now, timerStartMs, onStopTimer, { onOpen(TodayDest.Hair) }, { onOpen(TodayDest.Pickleball) })
+            }
             val alert: @Composable () -> Unit = { ui.insights.firstOrNull { it.alert }?.let { AlertLine(it) } }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 if (maxWidth >= WIDE) {
@@ -203,6 +208,7 @@ fun TodayScreen(
                                 water()
                                 vitals(Modifier.height(108.dp))
                             }
+                            routine()
                             alert()
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.gap)) { snippets() }
@@ -215,6 +221,7 @@ fun TodayScreen(
                             water()
                             vitals(Modifier.height(108.dp))
                         }
+                        routine()
                         snippets(); alert()
                     }
                 }
