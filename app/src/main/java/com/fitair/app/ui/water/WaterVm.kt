@@ -24,7 +24,7 @@ import java.time.ZoneId
 
 /** Everything the Water page shows. [totals] are ml per day of [days] (oldest first, today last), null = nothing logged. */
 class WaterUi(
-    val today: WaterToday, val entries: List<WaterDao.Entry>, val usualByNow: Int?, val nextReminderMs: Long?,
+    val today: WaterToday, val entries: List<WaterDao.Entry>, val entriesDay: LocalDate, val entriesTotalMl: Int, val usualByNow: Int?, val nextReminderMs: Long?,
     val span: Int, val days: List<LocalDate>, val totals: List<Int?>,
 )
 
@@ -34,19 +34,23 @@ class WaterVm(app: Application) : AndroidViewModel(app) {
     /** The drink just logged on this page, for the 10 s Undo. */
     var justLogged by mutableStateOf<Pair<Long, Int>?>(null); private set
     var span by mutableStateOf(7); private set
+    /** Days before today whose drinks are listed (0 = today, at most [MAX_BACK]). */
+    var back by mutableStateOf(0); private set
     private var job: Job? = null
 
     fun load() {
         job?.cancel()
         error = null
         job = viewModelScope.launch {
-            try { ui = withContext(Dispatchers.IO) { build(span) } }
+            try { ui = withContext(Dispatchers.IO) { build(span, back) } }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { AppLog.e("Water page load failed", e); error = e.message ?: e.javaClass.simpleName }
         }
     }
 
     fun chooseSpan(n: Int) { span = n; load() }
+
+    fun chooseBack(n: Int) { back = n.coerceIn(0, MAX_BACK); load() }
 
     fun add(ml: Int) {
         viewModelScope.launch {
@@ -75,15 +79,17 @@ class WaterVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun build(span: Int): WaterUi {
+    private fun build(span: Int, back: Int): WaterUi {
         val ctx = getApplication<Application>()
         val z = ZoneId.systemDefault()
         val today = LocalDate.now(z)
         val days = (span - 1 downTo 0).map { today.minusDays(it.toLong()) }
         val t = WaterDao.dailyTotals(ctx, days.first(), today, z)
         val now = Instant.now().atZone(z)
+        val shown = today.minusDays(back.toLong())
+        val entries = WaterDao.entries(ctx, shown, z)
         return WaterUi(
-            WaterDao.today(ctx), WaterDao.entries(ctx, today, z), usualByNow(ctx, today, z, now.hour * 60 + now.minute),
+            WaterDao.today(ctx), entries, shown, entries.sumOf { it.ml }, usualByNow(ctx, today, z, now.hour * 60 + now.minute),
             if (WaterDao.remindersOn(ctx)) runCatching { WaterAlarm.nextFireMs(ctx, System.currentTimeMillis()) }.getOrNull() else null,
             span, days, days.map { d -> t[d.toString()]?.first },
         )
@@ -101,4 +107,6 @@ class WaterVm(app: Application) : AndroidViewModel(app) {
         }
         WaterMath.usualByNow(byDay.values.toList(), nowMin)
     } catch (e: Exception) { null }
+
+    companion object { const val MAX_BACK = 90 }
 }

@@ -60,7 +60,7 @@ fun WaterScreen(onBack: () -> Unit) {
             }
             TodayCard(ui, vm.justLogged?.second, onAdd = vm::add, onOther = { other = true }, onUndo = vm::undo)
             Spacer(Modifier.height(Spacing.m))
-            DrinksCard(ui.entries, onDelete = vm::delete)
+            DrinksCard(ui, vm.back, onBack = vm::chooseBack, onDelete = vm::delete)
             Spacer(Modifier.height(Spacing.m))
             HistoryCard(ui, onSpan = vm::chooseSpan)
         }
@@ -120,14 +120,21 @@ private fun TodayCard(ui: WaterUi, justLogged: Int?, onAdd: (Int) -> Unit, onOth
 }
 
 @Composable
-private fun DrinksCard(entries: List<WaterDao.Entry>, onDelete: (WaterDao.Entry) -> Unit) {
+private fun DrinksCard(ui: WaterUi, back: Int, onBack: (Int) -> Unit, onDelete: (WaterDao.Entry) -> Unit) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
-    var confirm by remember { mutableStateOf<WaterDao.Entry?>(null) }
-    SectionCard("Today's drinks") {
-        if (entries.isEmpty()) {
-            Text("Nothing logged today.", style = Type.bodySmall, color = dim)
-            return@SectionCard
+    var confirm by remember(back) { mutableStateOf<WaterDao.Entry?>(null) }
+    val entries = ui.entries
+    SectionCard("Drinks") {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { onBack(back + 1) }, enabled = back < WaterVm.MAX_BACK, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("‹ Earlier", style = Type.label) }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (back == 0) "Today" else ui.entriesDay.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())), style = MaterialTheme.typography.titleMedium)
+                Text(if (entries.isEmpty()) "nothing logged" else "${l(ui.entriesTotalMl)} L in ${entries.size} drink${if (entries.size == 1) "" else "s"}", style = Type.bodySmall, color = dim)
+            }
+            TextButton(onClick = { onBack(back - 1) }, enabled = back > 0, modifier = Modifier.heightIn(min = Spacing.minTouch)) { Text("Later ›", style = Type.label) }
         }
+        if (entries.isEmpty()) return@SectionCard
+        Spacer(Modifier.height(Spacing.s))
         entries.forEachIndexed { i, e ->
             Row(
                 Modifier.fillMaxWidth().heightIn(min = Spacing.minTouch).clickable { confirm = if (confirm == e) null else e },
