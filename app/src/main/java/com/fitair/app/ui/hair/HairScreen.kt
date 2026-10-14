@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.withContext
 import com.fitair.app.core.Format
 import com.fitair.app.data.dao.PrefDao
 import com.fitair.app.data.dao.RoutineDao
@@ -49,7 +50,11 @@ fun HairScreen(onBack: () -> Unit) {
     var pm by remember { mutableIntStateOf(RoutineDao.pmMin(ctx)) }
     var full by remember { mutableStateOf(RoutineDao.fullScreenOn(ctx)) }
     var fsAllowed by remember { mutableStateOf(WaterAlarm.canFullScreen(ctx)) }
-    var testSent by remember { mutableStateOf(false) }
+    var testArmedAt by remember { mutableStateOf<Long?>(null) }
+    var testNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var testMsg by remember { mutableStateOf<String?>(null) }
+    var testResult by remember { mutableStateOf<RoutineAlarm.TestResult?>(null) }
+    var nextDue by remember { mutableStateOf<String?>(null) }
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycle) {
         val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) { fsAllowed = WaterAlarm.canFullScreen(ctx); tick++ } }
@@ -59,9 +64,37 @@ fun HairScreen(onBack: () -> Unit) {
     val notif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) { RoutineAlarm.enable(ctx); on = true; denied = false } else { on = false; denied = true }
     }
+    fun startTest() {
+        testMsg = RoutineAlarm.scheduleTest(ctx)
+        testResult = null
+        testArmedAt = if (testMsg == null) System.currentTimeMillis() else null
+    }
+    val notifForTest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) startTest() else testMsg = "Notifications are off for FitAir in Android's settings."
+    }
+    // ticks every second while a test runs; stops when the alarm has run or after four minutes
+    LaunchedEffect(testArmedAt) {
+        val armed = testArmedAt ?: return@LaunchedEffect
+        while (true) {
+            testNow = System.currentTimeMillis()
+            val r = RoutineAlarm.testResult(ctx)
+            if (r?.firedMs != null) { testResult = r; testArmedAt = null; break }
+            if (testNow - armed > 4 * 60_000L) { testResult = r; testArmedAt = null; testMsg = "timeout"; break }
+            kotlinx.coroutines.delay(1000)
+        }
+    }
     val activityCtx = LocalContext.current
     val today = LocalDate.now()
     val z = ZoneId.systemDefault()
+    LaunchedEffect(tick, on, pm, mask) {
+        nextDue = if (!on) null else withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val d = RoutineAlarm.nextDue(ctx, System.currentTimeMillis())
+                val at = java.time.Instant.ofEpochMilli(d.atMs).atZone(ZoneId.systemDefault())
+                "Next reminder: ${if (d.slot == RoutineSchedule.AM) "morning" else "evening"}, ${if (at.toLocalDate() == LocalDate.now()) "today" else "tomorrow"} ${Format.clock(at.hour, at.minute)}"
+            }.getOrNull()
+        }
+    }
     val log = remember(tick) { RoutineDao.range(ctx, today.minusDays(DAYS - 1L), today) }
     val nowMin = remember(tick) { java.time.LocalTime.now().let { it.hour * 60 + it.minute } }
 
@@ -122,6 +155,7 @@ fun HairScreen(onBack: () -> Unit) {
                         else { RoutineAlarm.enable(ctx); on = true; denied = false }
                     })
                 }
+                if (on) Text(nextDue ?: "", style = Type.bodySmall, color = dim)
                 if (denied) Text("Notifications are off for FitAir, so reminders cannot show. Allow them in the system settings and try again.", style = Type.bodySmall, color = MaterialTheme.colorScheme.error)
                 Text("Morning: ${RoutineSchedule.AFTER_WAKE_MIN} min after you wake, from your usual wake time and corrected when your sleep syncs. " +
                     "A missed dose is never made up or doubled. Questions about dose or side effects: ask a pharmacist or your doctor.", style = Type.bodySmall, color = dim)
@@ -162,8 +196,34 @@ fun HairScreen(onBack: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(Spacing.s))
-                OutlinedButton(onClick = { RoutineAlarm.scheduleTest(ctx); testSent = true }, modifier = Modifier.fillMaxWidth()) { Text("Test in 1 min", style = Type.label) }
-                if (testSent) Text("Lock the phone and wait a minute. If nothing shows, set FitAir's battery use to Unrestricted.", style = Type.bodySmall, color = dim)
+                val running = testArmedAt != null
+                val left = testArmedAt?.let { ((it + RoutineAlarm.TEST_DELAY_MS - testNow) / 1000).coerceAtLeast(0) }
+                OutlinedButton(
+                    enabled = !running,
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= 33 && WaterAlarm.needsNotificationPermission(ctx)) notifForTest.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        else startTest()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (running) (if (left!! > 0) "Reminder in 0:%02d, lock the phone".format(left) else "Waiting for Android…") else "Test reminder", style = Type.label) }
+                val r = testResult
+                val msg = testMsg
+                when {
+                    running -> Text("Lock the phone now. The reminder should appear in a minute.", style = Type.bodySmall, color = dim)
+                    msg != null && msg != "timeout" -> {
+                        Text(msg, style = Type.bodySmall, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { runCatching { activityCtx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)) } }) { Text("Notification settings", style = Type.label) }
+                    }
+                    msg == "timeout" -> {
+                        Text("Nothing arrived in 4 minutes: Android held back the alarm. Turn off battery saver for FitAir, allow background activity, and try again.", style = Type.bodySmall, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { runCatching { activityCtx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${ctx.packageName}"))) } }) { Text("App settings", style = Type.label) }
+                    }
+                    r?.firedMs != null -> {
+                        val late = ((r.firedMs - r.armedMs - RoutineAlarm.TEST_DELAY_MS) / 1000)
+                        if (r.result == "shown") Text("It worked: the reminder showed ${if (late > 5) "$late s late" else "on time"}.", style = Type.bodySmall, color = dim)
+                        else Text("The alarm ran but the notification was blocked: ${r.result?.removePrefix("blocked: ")}", style = Type.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         }
     }

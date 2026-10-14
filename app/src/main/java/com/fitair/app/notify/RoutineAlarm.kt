@@ -21,7 +21,8 @@ import java.time.ZoneId
 import kotlin.concurrent.thread
 
 /**
- * Hair routine reminders: one inexact alarm armed for the next due dose (AlarmManager.setAndAllowWhileIdle, no special permission),
+ * Hair routine reminders: one alarm armed for the next due dose. It uses AlarmManager.setAlarmClock (exact, fires in Doze, no special
+ * permission; Android shows a small alarm icon while one is pending) because an inexact alarm arrived many minutes late,
  * a high-priority notification with Done / Snooze / Skip and, when allowed, a full-screen screen over the lock screen.
  * Own channel, notification id, request codes and receiver, so it never interferes with the water reminders.
  * One alert per dose: an unanswered one waits quietly and is cleared at its cutoff; nothing is ever made up or doubled.
@@ -77,9 +78,15 @@ object RoutineAlarm {
 
     private fun scheduleAt(ctx: Context, slot: String, t: Long) {
         try {
-            ctx.getSystemService(AlarmManager::class.java)?.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, t, alarmPi(ctx, slot))
+            armExact(ctx, t, alarmPi(ctx, slot))
             AppLog.d("routine: next $slot at ${Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault()).toLocalTime()}")
         } catch (e: Exception) { AppLog.d("routine: schedule failed ${e.message}") }
+    }
+
+    /** Exact alarm that wakes the phone from Doze; tapping its status-bar icon opens the app. */
+    private fun armExact(ctx: Context, t: Long, pi: PendingIntent) {
+        val show = contentPi(ctx) ?: pi
+        ctx.getSystemService(AlarmManager::class.java)?.setAlarmClock(AlarmManager.AlarmClockInfo(t, show), pi)
     }
 
     private fun minuteOfDay(ms: Long, z: ZoneId) = Instant.ofEpochMilli(ms).atZone(z).let { it.hour * 60 + it.minute }
@@ -137,11 +144,41 @@ object RoutineAlarm {
         reschedule(app)
     }
 
-    /** Arms a test reminder in one minute, so a phone that delays alarms shows it on day 1. */
-    fun scheduleTest(ctx: Context) {
+    const val TEST_DELAY_MS = 60_000L
+    private const val K_TEST_ARMED = "routine_test_armed_ms"
+    private const val K_TEST_FIRED = "routine_test_fired_ms"
+    private const val K_TEST_RESULT = "routine_test_result"
+
+    /** Why a notification would not show right now, or null when nothing blocks it. */
+    fun blockedReason(ctx: Context): String? {
+        if (!try { NotificationManagerCompat.from(ctx).areNotificationsEnabled() } catch (e: Exception) { false })
+            return "Notifications are off for FitAir in Android's settings."
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = ctx.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL)
+            if (ch != null && ch.importance == NotificationManager.IMPORTANCE_NONE) return "The Hair routine notification channel is turned off."
+        }
+        return null
+    }
+
+    /** What the last test did: how it ended and how late. [firedMs] is null until the alarm has run. */
+    class TestResult(val armedMs: Long, val firedMs: Long?, val result: String?)
+
+    fun testResult(ctx: Context): TestResult? {
+        val p = prefs(ctx)
+        val armed = p.getLong(K_TEST_ARMED, 0L).takeIf { it > 0 } ?: return null
+        return TestResult(armed, p.getLong(K_TEST_FIRED, 0L).takeIf { it >= armed }, p.getString(K_TEST_RESULT, null))
+    }
+
+    /** Arms a test reminder in [TEST_DELAY_MS] through the same alarm call the real reminders use. Returns a reason when it cannot show. */
+    fun scheduleTest(ctx: Context): String? {
         val app = ctx.applicationContext
         ensureChannel(app)
-        try { app.getSystemService(AlarmManager::class.java)?.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 60_000L, alarmPi(app, RoutineSchedule.AM, test = true)) } catch (e: Exception) { }
+        blockedReason(app)?.let { return it }
+        val now = System.currentTimeMillis()
+        prefs(app).edit().putLong(K_TEST_ARMED, now).remove(K_TEST_FIRED).remove(K_TEST_RESULT).apply()
+        try { armExact(app, now + TEST_DELAY_MS, alarmPi(app, RoutineSchedule.AM, test = true)) }
+        catch (e: Exception) { return "Android refused the alarm: ${e.message}" }
+        return null
     }
 
     private fun actionPi(ctx: Context, code: Int, action: String, slot: String, test: Boolean) = PendingIntent.getBroadcast(
@@ -160,25 +197,30 @@ object RoutineAlarm {
         return PendingIntent.getActivity(ctx, 24, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    private fun post(ctx: Context, slot: String, date: LocalDate, text: String, cutoffMs: Long?, test: Boolean) {
-        if (!try { NotificationManagerCompat.from(ctx).areNotificationsEnabled() } catch (e: Exception) { false }) return
+    private fun post(ctx: Context, slot: String, date: LocalDate, text: String, cutoffMs: Long?, test: Boolean): String {
+        blockedReason(ctx)?.let { return "blocked: $it" }
         ensureChannel(ctx)
         val b = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(if (test) "Hair routine (test)" else "Hair routine").setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(contentPi(ctx)).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(reminderPi(ctx, slot, test)).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(0, "Done", actionPi(ctx, 30, ACTION_DONE, slot, test))
             .addAction(0, "Skip", actionPi(ctx, 31, ACTION_SKIP, slot, test))
         if (test || canSnooze(ctx, date, slot)) b.addAction(0, "Snooze ${RoutineSchedule.SNOOZE_MIN} min", actionPi(ctx, 32, ACTION_SNOOZE, slot, test))
         if (cutoffMs != null) b.setTimeoutAfter((cutoffMs - System.currentTimeMillis()).coerceAtLeast(60_000L))
         if (RoutineDao.fullScreenOn(ctx) && WaterAlarm.canFullScreen(ctx)) b.setFullScreenIntent(reminderPi(ctx, slot, test), true)
-        try { NotificationManagerCompat.from(ctx).notify(NOTIF_ID, b.build()) } catch (e: SecurityException) { AppLog.d("routine: no notification permission") }
+        return try { NotificationManagerCompat.from(ctx).notify(NOTIF_ID, b.build()); "shown" }
+        catch (e: SecurityException) { AppLog.d("routine: no notification permission"); "blocked: no notification permission" }
     }
 
     fun fire(ctx: Context, slot: String, test: Boolean) {
         val app = ctx.applicationContext
-        if (test) { post(app, slot, LocalDate.now(), RoutineSchedule.text(slot, false), null, true); return }
+        if (test) {
+            val r = post(app, slot, LocalDate.now(), RoutineSchedule.text(slot, false), null, true)
+            prefs(app).edit().putLong(K_TEST_FIRED, System.currentTimeMillis()).putString(K_TEST_RESULT, r).apply()
+            return
+        }
         if (!RoutineDao.on(app)) { cancel(app); return }
         val z = ZoneId.systemDefault()
         val now = System.currentTimeMillis()
